@@ -21,6 +21,7 @@ mongoose.connect(MONGODB_URI)
     // Ensure models are loaded
     require('./models/User');
     require('./models/VerificationToken');
+    require('./models/Course');
     console.log('✅ Models loaded');
   })
   .catch((error) => {
@@ -29,7 +30,14 @@ mongoose.connect(MONGODB_URI)
 
 // Routes (after database connection)
 const authRoutes = require('./routes/authRoutes');
+const courseRoutes = require('./routes/courseRoutes');
+const userRoutes = require('./routes/userRoutes');
+
 app.use('/api/auth', authRoutes);
+app.use('/api/courses', courseRoutes);
+// Also support /courses for backward compatibility
+app.use('/courses', courseRoutes);
+app.use('/api/users', userRoutes);
 
 
 app.get('/', (req, res) => {
