@@ -40,6 +40,12 @@ const userSchema = new mongoose.Schema({
     enum: ['active', 'blocked', 'inactive'],
     default: 'active',
   },
+  enrolledCourses: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Course',
+    },
+  ],
 }, {
   timestamps: true,
 });

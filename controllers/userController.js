@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Course = require('../models/Course');
 
 // GET /api/users
 // Returns users for admin listing
@@ -131,9 +132,118 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// POST /api/users/enroll
+// Enroll user in a course after successful payment
+const enrollInCourse = async (req, res) => {
+  try {
+    const { userId, courseId } = req.body;
+
+    if (!userId || !courseId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId and courseId are required',
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    const course = await Course.findById(courseId);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    const alreadyEnrolled = user.enrolledCourses?.some(
+      (cId) => cId.toString() === courseId.toString()
+    );
+
+    if (alreadyEnrolled) {
+      return res.status(200).json({
+        success: true,
+        message: 'User already enrolled in this course',
+      });
+    }
+
+    user.enrolledCourses = user.enrolledCourses || [];
+    user.enrolledCourses.push(course._id);
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'User enrolled in course successfully',
+    });
+  } catch (error) {
+    console.error('Error enrolling user in course:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to enroll in course',
+      error: error.message,
+    });
+  }
+};
+
+// GET /api/users/my-courses?userId=...
+// Return enrolled courses for a user
+const getMyCourses = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId is required',
+      });
+    }
+
+    const user = await User.findById(userId).populate({
+      path: 'enrolledCourses',
+      select: 'title description thumbnailUrl skills price discountPercentage',
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    const courses = (user.enrolledCourses || []).map((course) => ({
+      id: course._id.toString(),
+      title: course.title || '',
+      description: course.description || '',
+      thumbnailUrl: course.thumbnailUrl || '',
+      skills: course.skills || [],
+      price: course.price,
+      discountPercentage: course.discountPercentage || 0,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: courses,
+    });
+  } catch (error) {
+    console.error('Error fetching my courses:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch enrolled courses',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getProfile,
   updateProfile,
+  enrollInCourse,
+  getMyCourses,
 };
 
