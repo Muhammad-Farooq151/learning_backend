@@ -34,13 +34,13 @@ const authRoutes = require('./routes/authRoutes');
 const courseRoutes = require('./routes/courseRoutes');
 const userRoutes = require('./routes/userRoutes');
 const tutorRoutes = require('./routes/tutorRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', courseRoutes);
-// Also support /courses for backward compatibility
-app.use('/courses', courseRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/tutors', tutorRoutes);
+app.use('/api/payments', paymentRoutes);
 
 
 app.get('/', (req, res) => {
