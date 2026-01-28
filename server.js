@@ -22,6 +22,7 @@ mongoose.connect(MONGODB_URI)
     require('./models/User');
     require('./models/VerificationToken');
     require('./models/Course');
+    require('./models/Tutor');
     console.log('✅ Models loaded');
   })
   .catch((error) => {
@@ -32,12 +33,14 @@ mongoose.connect(MONGODB_URI)
 const authRoutes = require('./routes/authRoutes');
 const courseRoutes = require('./routes/courseRoutes');
 const userRoutes = require('./routes/userRoutes');
+const tutorRoutes = require('./routes/tutorRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', courseRoutes);
 // Also support /courses for backward compatibility
 app.use('/courses', courseRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/tutors', tutorRoutes);
 
 
 app.get('/', (req, res) => {

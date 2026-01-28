@@ -12,6 +12,7 @@ const createCourse = async (req, res) => {
       category,
       instructor,
       price,
+      discountPercentage,
       skills,
       description,
       faqs,
@@ -105,12 +106,26 @@ const createCourse = async (req, res) => {
       }
     }
 
+    // Parse discountPercentage
+    const parsedDiscountPercentage = discountPercentage 
+      ? parseFloat(discountPercentage) 
+      : 0;
+    
+    // Validate discount percentage
+    if (parsedDiscountPercentage < 0 || parsedDiscountPercentage > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Discount percentage must be between 0 and 100',
+      });
+    }
+
     // Create course
     const course = new Course({
       title,
       category,
       instructor,
       price,
+      discountPercentage: parsedDiscountPercentage,
       skills: parsedSkills || [],
       description,
       faqs: parsedFaqs || [],
@@ -232,6 +247,7 @@ const updateCourse = async (req, res) => {
       category,
       instructor,
       price,
+      discountPercentage,
       skills,
       description,
       faqs,
@@ -341,6 +357,18 @@ const updateCourse = async (req, res) => {
         }
         lesson.order = i;
       });
+    }
+
+    // Parse and validate discountPercentage
+    if (discountPercentage !== undefined) {
+      const parsedDiscountPercentage = parseFloat(discountPercentage) || 0;
+      if (parsedDiscountPercentage < 0 || parsedDiscountPercentage > 100) {
+        return res.status(400).json({
+          success: false,
+          message: 'Discount percentage must be between 0 and 100',
+        });
+      }
+      course.discountPercentage = parsedDiscountPercentage;
     }
 
     // Update course fields

@@ -136,6 +136,15 @@ const uploadCombined = multer({
 // Using .any() to accept all fields, then we'll filter in the controller
 const uploadCourseFiles = uploadCombined.any();
 
+// Middleware for tutor image upload
+const uploadTutorFiles = multer({
+  storage: imageStorage,
+  fileFilter: imageFileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+}).single('image');
+
 // Middleware for multiple video uploads (for lessons)
 const uploadMultipleVideos = uploadVideo.fields([
   { name: 'lessonVideos', maxCount: 50 }, // Support up to 50 lessons
@@ -166,5 +175,6 @@ module.exports = {
   uploadMultipleVideos,
   uploadThumbnail,
   uploadCourseFiles,
+  uploadTutorFiles,
   cleanupFiles,
 };

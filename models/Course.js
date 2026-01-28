@@ -67,6 +67,12 @@ const courseSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  discountPercentage: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
+  },
   skills: [{
     type: String,
     trim: true,
