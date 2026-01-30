@@ -1,4 +1,5 @@
 const Course = require('../models/Course');
+const User = require('../models/User');
 const { uploadVideoToCloudinary, uploadImageToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
@@ -205,11 +206,23 @@ const getAllCourses = async (req, res) => {
       .limit(parseInt(limit))
       .populate('createdBy', 'fullName email');
 
+    // Calculate enrolled count for each course
+    const coursesWithEnrolled = await Promise.all(
+      courses.map(async (course) => {
+        const enrolledCount = await User.countDocuments({
+          enrolledCourses: course._id,
+        });
+        const courseObj = course.toObject();
+        courseObj.enrolled = enrolledCount;
+        return courseObj;
+      })
+    );
+
     const total = await Course.countDocuments(query);
 
     res.status(200).json({
       success: true,
-      data: courses,
+      data: coursesWithEnrolled,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -240,9 +253,17 @@ const getCourseById = async (req, res) => {
       });
     }
 
+    // Calculate enrolled count for this course
+    const enrolledCount = await User.countDocuments({
+      enrolledCourses: course._id,
+    });
+
+    const courseObj = course.toObject();
+    courseObj.enrolled = enrolledCount;
+
     res.status(200).json({
       success: true,
-      data: course,
+      data: courseObj,
     });
   } catch (error) {
     console.error('Error fetching course:', error);
