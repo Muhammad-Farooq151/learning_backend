@@ -239,11 +239,129 @@ const getMyCourses = async (req, res) => {
   }
 };
 
+// GET /api/users/dashboard-stats?userId=...
+// Return dashboard statistics for a user
+const getDashboardStats = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId is required',
+      });
+    }
+
+    const user = await User.findById(userId).populate({
+      path: 'enrolledCourses',
+      select: 'title category lessons createdAt',
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    const enrolledCourses = user.enrolledCourses || [];
+
+    // Calculate courses completed (all enrolled courses)
+    const coursesCompleted = enrolledCourses.length;
+
+    // Calculate total learning time (sum of all lesson durations)
+    let totalLearningTime = 0; // in seconds
+    enrolledCourses.forEach((course) => {
+      if (course.lessons && Array.isArray(course.lessons)) {
+        course.lessons.forEach((lesson) => {
+          totalLearningTime += lesson.duration || 0;
+        });
+      }
+    });
+    const totalHours = Math.floor(totalLearningTime / 3600);
+    const totalMinutes = Math.floor((totalLearningTime % 3600) / 60);
+    const totalLearningTimeFormatted = totalHours > 0 ? `${totalHours}h ${totalMinutes}m` : `${totalMinutes}m`;
+
+    // Calculate overall progress (average, for now assume 50% for enrolled courses)
+    const overallProgress = enrolledCourses.length > 0 ? Math.round(50) : 0;
+
+    // Calculate monthly learning progress (based on enrollment dates)
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const currentYear = new Date().getFullYear();
+    const monthlyData = new Array(12).fill(0);
+
+    enrolledCourses.forEach((course) => {
+      if (course.createdAt) {
+        const courseDate = new Date(course.createdAt);
+        if (courseDate.getFullYear() === currentYear) {
+          const monthIndex = courseDate.getMonth();
+          monthlyData[monthIndex] += 1;
+        }
+      }
+    });
+
+    // Convert to percentage (max value = 100)
+    const maxEnrollments = Math.max(...monthlyData, 1);
+    const monthlyProgressData = months.map((month, index) => ({
+      month,
+      value: maxEnrollments > 0 ? Math.round((monthlyData[index] / maxEnrollments) * 100) : 0,
+    }));
+
+    // Calculate category breakdown
+    const categoryCount = {};
+    enrolledCourses.forEach((course) => {
+      const category = course.category || 'Uncategorized';
+      categoryCount[category] = (categoryCount[category] || 0) + 1;
+    });
+
+    const totalCategories = enrolledCourses.length;
+    const categoryBreakdown = Object.entries(categoryCount).map(([name, count]) => ({
+      name,
+      value: totalCategories > 0 ? Math.round((count / totalCategories) * 100) : 0,
+    }));
+
+    // Assign colors to categories
+    const categoryColors = {
+      'Programming': '#4F7BFF',
+      'Design': '#FFC657',
+      'Data Science': '#8CD867',
+      'AI/ML': '#FF6B6B',
+      'AI Agents & Agentic AI': '#9B59B6',
+      'Uncategorized': '#95A5A6',
+    };
+
+    const categoryBreakdownWithColors = categoryBreakdown.map((item) => ({
+      ...item,
+      color: categoryColors[item.name] || '#95A5A6',
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        coursesCompleted: coursesCompleted,
+        totalLearningTime: totalLearningTimeFormatted,
+        totalLearningTimeSeconds: totalLearningTime,
+        overallProgress: overallProgress,
+        monthlyProgress: monthlyProgressData,
+        categoryBreakdown: categoryBreakdownWithColors,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch dashboard statistics',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getProfile,
   updateProfile,
   enrollInCourse,
   getMyCourses,
+  getDashboardStats,
 };
 

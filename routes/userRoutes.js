@@ -7,6 +7,7 @@ const {
   updateProfile,
   enrollInCourse,
   getMyCourses,
+  getDashboardStats,
 } = require('../controllers/userController');
 
 // GET /api/users
@@ -23,6 +24,9 @@ router.post('/enroll', enrollInCourse);
 
 // GET /api/users/my-courses?userId=... - Get enrolled courses for user
 router.get('/my-courses', getMyCourses);
+
+// GET /api/users/dashboard-stats?userId=... - Get dashboard statistics for user
+router.get('/dashboard-stats', getDashboardStats);
 
 module.exports = router;
 
