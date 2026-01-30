@@ -13,6 +13,8 @@ const createCourse = async (req, res) => {
       instructor,
       price,
       discountPercentage,
+      courseLevel,
+      taxPercentage,
       skills,
       description,
       faqs,
@@ -26,6 +28,14 @@ const createCourse = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: title, category, instructor, price, description',
+      });
+    }
+
+    // Validate courseLevel if provided
+    if (courseLevel && !['Beginner', 'Intermediate', 'Expert'].includes(courseLevel)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid courseLevel. Must be one of: Beginner, Intermediate, Expert',
       });
     }
 
@@ -119,6 +129,19 @@ const createCourse = async (req, res) => {
       });
     }
 
+    // Parse taxPercentage
+    const parsedTaxPercentage = taxPercentage 
+      ? parseFloat(taxPercentage) 
+      : 0;
+
+    // Validate taxPercentage range
+    if (parsedTaxPercentage < 0 || parsedTaxPercentage > 70) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tax percentage must be between 0% and 70%',
+      });
+    }
+
     // Create course
     const course = new Course({
       title,
@@ -126,6 +149,8 @@ const createCourse = async (req, res) => {
       instructor,
       price,
       discountPercentage: parsedDiscountPercentage,
+      courseLevel: courseLevel,
+      taxPercentage: parsedTaxPercentage,
       skills: parsedSkills || [],
       description,
       faqs: parsedFaqs || [],
@@ -248,6 +273,8 @@ const updateCourse = async (req, res) => {
       instructor,
       price,
       discountPercentage,
+      courseLevel,
+      taxPercentage,
       skills,
       description,
       faqs,
@@ -369,6 +396,29 @@ const updateCourse = async (req, res) => {
         });
       }
       course.discountPercentage = parsedDiscountPercentage;
+    }
+
+    // Update courseLevel if provided
+    if (courseLevel !== undefined && courseLevel !== null && courseLevel !== '') {
+      if (!['Beginner', 'Intermediate', 'Expert'].includes(courseLevel)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid courseLevel. Must be one of: Beginner, Intermediate, Expert',
+        });
+      }
+      course.courseLevel = courseLevel;
+    }
+
+    // Parse and validate taxPercentage
+    if (taxPercentage !== undefined) {
+      const parsedTaxPercentage = parseFloat(taxPercentage) || 0;
+      if (parsedTaxPercentage < 0 || parsedTaxPercentage > 70) {
+        return res.status(400).json({
+          success: false,
+          message: 'Tax percentage must be between 0% and 70%',
+        });
+      }
+      course.taxPercentage = parsedTaxPercentage;
     }
 
     // Update course fields

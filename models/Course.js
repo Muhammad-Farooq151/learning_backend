@@ -73,6 +73,17 @@ const courseSchema = new mongoose.Schema({
     min: 0,
     max: 100,
   },
+  courseLevel: {
+    type: String,
+    enum: ['Beginner', 'Intermediate', 'Expert'],
+    trim: true,
+  },
+  taxPercentage: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 70,
+  },
   skills: [{
     type: String,
     trim: true,
