@@ -1,6 +1,6 @@
 const Course = require('../models/Course');
 const User = require('../models/User');
-const { uploadVideoToCloudinary, uploadImageToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
+const { uploadVideoToCloudinary, uploadImageToCloudinary, uploadFileToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
 const path = require('path');
@@ -20,6 +20,7 @@ const createCourse = async (req, res) => {
       description,
       faqs,
       lessons,
+      resources,
       keywords,
       status = 'draft',
     } = req.body;
@@ -117,6 +118,51 @@ const createCourse = async (req, res) => {
       }
     }
 
+    // Process course resources (optional)
+    const processedResources = [];
+    if (parsedResources && Array.isArray(parsedResources) && parsedResources.length > 0) {
+      // Get all resource files
+      const resourceFiles = req.files && Array.isArray(req.files)
+        ? req.files.filter(f => f.fieldname === 'resourceFiles')
+        : [];
+
+      for (let i = 0; i < parsedResources.length; i++) {
+        const resource = parsedResources[i];
+        const resourceData = {
+          name: resource.name || '',
+          description: resource.description || '',
+          fileType: resource.fileType || '',
+        };
+
+        // Get file for this resource (by index)
+        const resourceFile = resourceFiles[i] || null;
+
+        if (resourceFile) {
+          try {
+            const fileResult = await uploadFileToCloudinary(resourceFile.path, 'courses/resources');
+            resourceData.fileUrl = fileResult.downloadUrl || fileResult.url; // Use downloadUrl for PDFs
+            resourceData.filePublicId = fileResult.publicId;
+            // Clean up local file
+            if (fs.existsSync(resourceFile.path)) {
+              fs.unlinkSync(resourceFile.path);
+            }
+          } catch (error) {
+            console.error(`Error uploading resource file ${i}:`, error);
+            cleanupFiles([resourceFile]);
+            return res.status(500).json({
+              success: false,
+              message: `Error uploading resource file ${i + 1}`,
+            });
+          }
+        }
+
+        // Only add resource if it has a name and file
+        if (resourceData.name && resourceData.fileUrl) {
+          processedResources.push(resourceData);
+        }
+      }
+    }
+
     // Parse discountPercentage
     const parsedDiscountPercentage = discountPercentage 
       ? parseFloat(discountPercentage) 
@@ -156,6 +202,7 @@ const createCourse = async (req, res) => {
       description,
       faqs: parsedFaqs || [],
       lessons: processedLessons,
+      resources: processedResources,
       keywords: parsedKeywords || [],
       thumbnailUrl,
       thumbnailPublicId,
@@ -300,6 +347,7 @@ const updateCourse = async (req, res) => {
       description,
       faqs,
       lessons,
+      resources,
       keywords,
       status,
     } = req.body;
@@ -308,6 +356,7 @@ const updateCourse = async (req, res) => {
     const parsedSkills = typeof skills === 'string' ? JSON.parse(skills) : skills;
     const parsedFaqs = typeof faqs === 'string' ? JSON.parse(faqs) : faqs;
     const parsedLessons = typeof lessons === 'string' ? JSON.parse(lessons) : lessons;
+    const parsedResources = typeof resources === 'string' ? JSON.parse(resources) : resources;
     const parsedKeywords = typeof keywords === 'string' ? JSON.parse(keywords) : keywords;
 
     // Update thumbnail if new one is provided
@@ -469,6 +518,84 @@ const updateCourse = async (req, res) => {
     if (price) course.price = price;
     if (parsedSkills) course.skills = parsedSkills;
     if (description) course.description = description;
+    // Process course resources (optional)
+    if (parsedResources && Array.isArray(parsedResources)) {
+      // Get all resource files
+      const resourceFiles = req.files && Array.isArray(req.files)
+        ? req.files.filter(f => f.fieldname === 'resourceFiles')
+        : [];
+
+      const processedResources = [];
+      
+      for (let i = 0; i < parsedResources.length; i++) {
+        const resource = parsedResources[i];
+        const existingResource = course.resources && course.resources[i] ? course.resources[i] : null;
+        
+        const resourceData = {
+          name: resource.name || '',
+          description: resource.description || '',
+          fileType: resource.fileType || '',
+        };
+
+        // Get file for this resource (by index)
+        const resourceFile = resourceFiles[i] || null;
+
+        if (resourceFile) {
+          // Delete old resource file from Cloudinary if exists
+          if (existingResource && existingResource.filePublicId) {
+            try {
+              await deleteFromCloudinary(existingResource.filePublicId);
+            } catch (error) {
+              console.error('Error deleting old resource file:', error);
+            }
+          }
+
+          // Upload new resource file
+          try {
+            const fileResult = await uploadFileToCloudinary(resourceFile.path, 'courses/resources');
+            resourceData.fileUrl = fileResult.downloadUrl || fileResult.url; // Use downloadUrl for PDFs
+            resourceData.filePublicId = fileResult.publicId;
+            // Clean up local file
+            if (fs.existsSync(resourceFile.path)) {
+              fs.unlinkSync(resourceFile.path);
+            }
+          } catch (error) {
+            console.error(`Error uploading resource file ${i}:`, error);
+            cleanupFiles([resourceFile]);
+            return res.status(500).json({
+              success: false,
+              message: `Error uploading resource file ${i + 1}`,
+            });
+          }
+        } else if (existingResource) {
+          // Keep existing file if no new file is provided
+          resourceData.fileUrl = existingResource.fileUrl;
+          resourceData.filePublicId = existingResource.filePublicId;
+        }
+
+        // Only add resource if it has a name and file
+        if (resourceData.name && resourceData.fileUrl) {
+          processedResources.push(resourceData);
+        }
+      }
+
+      // Delete resources that are no longer in the list
+      if (course.resources && course.resources.length > processedResources.length) {
+        for (let i = processedResources.length; i < course.resources.length; i++) {
+          const oldResource = course.resources[i];
+          if (oldResource && oldResource.filePublicId) {
+            try {
+              await deleteFromCloudinary(oldResource.filePublicId);
+            } catch (error) {
+              console.error('Error deleting old resource:', error);
+            }
+          }
+        }
+      }
+
+      course.resources = processedResources;
+    }
+
     if (parsedFaqs) course.faqs = parsedFaqs;
     if (parsedLessons) course.lessons = parsedLessons;
     if (parsedKeywords) course.keywords = parsedKeywords;
