@@ -1,4 +1,5 @@
 const Course = require('../models/Course');
+const User = require('../models/User');
 const { uploadVideoToCloudinary, uploadImageToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
@@ -13,6 +14,8 @@ const createCourse = async (req, res) => {
       instructor,
       price,
       discountPercentage,
+      courseLevel,
+      taxPercentage,
       skills,
       description,
       faqs,
@@ -26,6 +29,14 @@ const createCourse = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: title, category, instructor, price, description',
+      });
+    }
+
+    // Validate courseLevel if provided
+    if (courseLevel && !['Beginner', 'Intermediate', 'Expert'].includes(courseLevel)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid courseLevel. Must be one of: Beginner, Intermediate, Expert',
       });
     }
 
@@ -119,6 +130,19 @@ const createCourse = async (req, res) => {
       });
     }
 
+    // Parse taxPercentage
+    const parsedTaxPercentage = taxPercentage 
+      ? parseFloat(taxPercentage) 
+      : 0;
+
+    // Validate taxPercentage range
+    if (parsedTaxPercentage < 0 || parsedTaxPercentage > 70) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tax percentage must be between 0% and 70%',
+      });
+    }
+
     // Create course
     const course = new Course({
       title,
@@ -126,6 +150,8 @@ const createCourse = async (req, res) => {
       instructor,
       price,
       discountPercentage: parsedDiscountPercentage,
+      courseLevel: courseLevel,
+      taxPercentage: parsedTaxPercentage,
       skills: parsedSkills || [],
       description,
       faqs: parsedFaqs || [],
@@ -180,11 +206,23 @@ const getAllCourses = async (req, res) => {
       .limit(parseInt(limit))
       .populate('createdBy', 'fullName email');
 
+    // Calculate enrolled count for each course
+    const coursesWithEnrolled = await Promise.all(
+      courses.map(async (course) => {
+        const enrolledCount = await User.countDocuments({
+          enrolledCourses: course._id,
+        });
+        const courseObj = course.toObject();
+        courseObj.enrolled = enrolledCount;
+        return courseObj;
+      })
+    );
+
     const total = await Course.countDocuments(query);
 
     res.status(200).json({
       success: true,
-      data: courses,
+      data: coursesWithEnrolled,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -215,9 +253,17 @@ const getCourseById = async (req, res) => {
       });
     }
 
+    // Calculate enrolled count for this course
+    const enrolledCount = await User.countDocuments({
+      enrolledCourses: course._id,
+    });
+
+    const courseObj = course.toObject();
+    courseObj.enrolled = enrolledCount;
+
     res.status(200).json({
       success: true,
-      data: course,
+      data: courseObj,
     });
   } catch (error) {
     console.error('Error fetching course:', error);
@@ -248,6 +294,8 @@ const updateCourse = async (req, res) => {
       instructor,
       price,
       discountPercentage,
+      courseLevel,
+      taxPercentage,
       skills,
       description,
       faqs,
@@ -300,14 +348,32 @@ const updateCourse = async (req, res) => {
       ? req.files.filter(f => f.fieldname === 'lessonVideos')
       : [];
 
+    // Get video indices mapping (which video belongs to which lesson)
+    const videoIndices = req.body.videoIndices 
+      ? (typeof req.body.videoIndices === 'string' ? JSON.parse(req.body.videoIndices) : req.body.videoIndices)
+      : [];
+    
+    console.log(`Processing ${lessonVideoFiles.length} video files for ${parsedLessons.length} lessons`);
+    console.log('Video indices mapping:', videoIndices);
+    
+    // Create a map: lessonIndex -> videoFile
+    const lessonVideoMap = {};
+    lessonVideoFiles.forEach((videoFile, videoIndex) => {
+      const lessonIndex = videoIndices[videoIndex];
+      if (lessonIndex !== undefined) {
+        lessonVideoMap[lessonIndex] = videoFile;
+        console.log(`Mapped video ${videoIndex} to lesson ${lessonIndex}`);
+      }
+    });
+
     // Update lesson videos
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
         const existingLesson = course.lessons[i];
 
-        // Get video file for this lesson (by index)
-        const videoFile = lessonVideoFiles[i] || null;
+        // Get video file for this lesson (using the map)
+        const videoFile = lessonVideoMap[i] || null;
 
         if (videoFile) {
           // Delete old video from Cloudinary if it exists
@@ -343,6 +409,8 @@ const updateCourse = async (req, res) => {
           lesson.videoPublicId = existingLesson.videoPublicId;
           lesson.duration = existingLesson.duration;
         }
+        // Note: If it's a new lesson (no existingLesson) and no videoFile was uploaded,
+        // the lesson.videoUrl will remain undefined/null, which is correct for new lessons without videos
 
         lesson.order = i;
       }
@@ -369,6 +437,29 @@ const updateCourse = async (req, res) => {
         });
       }
       course.discountPercentage = parsedDiscountPercentage;
+    }
+
+    // Update courseLevel if provided
+    if (courseLevel !== undefined && courseLevel !== null && courseLevel !== '') {
+      if (!['Beginner', 'Intermediate', 'Expert'].includes(courseLevel)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid courseLevel. Must be one of: Beginner, Intermediate, Expert',
+        });
+      }
+      course.courseLevel = courseLevel;
+    }
+
+    // Parse and validate taxPercentage
+    if (taxPercentage !== undefined) {
+      const parsedTaxPercentage = parseFloat(taxPercentage) || 0;
+      if (parsedTaxPercentage < 0 || parsedTaxPercentage > 70) {
+        return res.status(400).json({
+          success: false,
+          message: 'Tax percentage must be between 0% and 70%',
+        });
+      }
+      course.taxPercentage = parsedTaxPercentage;
     }
 
     // Update course fields
