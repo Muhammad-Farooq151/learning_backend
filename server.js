@@ -39,6 +39,7 @@ const tutorRoutes = require('./routes/tutorRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const progressRoutes = require('./routes/progressRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', courseRoutes);
@@ -47,6 +48,7 @@ app.use('/api/tutors', tutorRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/progress', progressRoutes);
+app.use('/api/admins', adminRoutes);
 
 
 app.get('/', (req, res) => {
