@@ -78,6 +78,12 @@ const uploadImage = multer({
   },
 });
 
+// Create resources directory if it doesn't exist
+const resourcesDir = path.join(uploadsDir, 'resources');
+if (!fs.existsSync(resourcesDir)) {
+  fs.mkdirSync(resourcesDir, { recursive: true });
+}
+
 // Combined storage that routes files based on field name
 const combinedStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -85,6 +91,8 @@ const combinedStorage = multer.diskStorage({
       cb(null, imagesDir);
     } else if (file.fieldname === 'lessonVideos') {
       cb(null, videosDir);
+    } else if (file.fieldname === 'resourceFiles') {
+      cb(null, resourcesDir);
     } else {
       cb(null, uploadsDir);
     }
@@ -95,6 +103,8 @@ const combinedStorage = multer.diskStorage({
       cb(null, 'image-' + uniqueSuffix + path.extname(file.originalname));
     } else if (file.fieldname === 'lessonVideos') {
       cb(null, 'video-' + uniqueSuffix + path.extname(file.originalname));
+    } else if (file.fieldname === 'resourceFiles') {
+      cb(null, 'resource-' + uniqueSuffix + path.extname(file.originalname));
     } else {
       cb(null, 'file-' + uniqueSuffix + path.extname(file.originalname));
     }
@@ -117,6 +127,14 @@ const combinedFileFilter = (req, file, cb) => {
     } else {
       cb(new Error('Invalid video file type. Only MP4, MOV, and AVI are allowed.'), false);
     }
+  } else if (file.fieldname === 'resourceFiles') {
+    // Allow PDF, JPEG, PNG for resources
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid resource file type. Only PDF, JPEG, and PNG are allowed.'), false);
+    }
   } else {
     // Reject unexpected file fields (but allow text fields which won't reach here)
     cb(new Error(`Unexpected file field: ${file.fieldname}`), false);
@@ -128,7 +146,7 @@ const uploadCombined = multer({
   storage: combinedStorage,
   fileFilter: combinedFileFilter,
   limits: {
-    fileSize: 800 * 1024 * 1024, // 800MB limit for videos
+    fileSize: 800 * 1024 * 1024, // 800MB limit for videos (resources have 10MB limit in frontend)
   },
 });
 

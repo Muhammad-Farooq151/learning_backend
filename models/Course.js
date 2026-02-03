@@ -46,6 +46,32 @@ const faqSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+const resourceSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  description: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  fileType: {
+    type: String,
+    enum: ['PDF', 'JPEG', 'PNG'],
+    trim: true,
+  },
+  fileUrl: {
+    type: String,
+    default: null,
+  },
+  filePublicId: {
+    type: String,
+    default: null,
+  },
+}, { timestamps: true });
+
 const courseSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -95,6 +121,7 @@ const courseSchema = new mongoose.Schema({
   },
   faqs: [faqSchema],
   lessons: [lessonSchema],
+  resources: [resourceSchema],
   keywords: [{
     type: String,
     trim: true,
