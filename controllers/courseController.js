@@ -348,14 +348,32 @@ const updateCourse = async (req, res) => {
       ? req.files.filter(f => f.fieldname === 'lessonVideos')
       : [];
 
+    // Get video indices mapping (which video belongs to which lesson)
+    const videoIndices = req.body.videoIndices 
+      ? (typeof req.body.videoIndices === 'string' ? JSON.parse(req.body.videoIndices) : req.body.videoIndices)
+      : [];
+    
+    console.log(`Processing ${lessonVideoFiles.length} video files for ${parsedLessons.length} lessons`);
+    console.log('Video indices mapping:', videoIndices);
+    
+    // Create a map: lessonIndex -> videoFile
+    const lessonVideoMap = {};
+    lessonVideoFiles.forEach((videoFile, videoIndex) => {
+      const lessonIndex = videoIndices[videoIndex];
+      if (lessonIndex !== undefined) {
+        lessonVideoMap[lessonIndex] = videoFile;
+        console.log(`Mapped video ${videoIndex} to lesson ${lessonIndex}`);
+      }
+    });
+
     // Update lesson videos
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
         const existingLesson = course.lessons[i];
 
-        // Get video file for this lesson (by index)
-        const videoFile = lessonVideoFiles[i] || null;
+        // Get video file for this lesson (using the map)
+        const videoFile = lessonVideoMap[i] || null;
 
         if (videoFile) {
           // Delete old video from Cloudinary if it exists
@@ -391,6 +409,8 @@ const updateCourse = async (req, res) => {
           lesson.videoPublicId = existingLesson.videoPublicId;
           lesson.duration = existingLesson.duration;
         }
+        // Note: If it's a new lesson (no existingLesson) and no videoFile was uploaded,
+        // the lesson.videoUrl will remain undefined/null, which is correct for new lessons without videos
 
         lesson.order = i;
       }
