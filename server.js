@@ -25,6 +25,7 @@ mongoose.connect(MONGODB_URI)
     require('./models/Tutor');
     require('./models/Transaction');
     require('./models/CourseProgress');
+    require('./models/Feedback');
     console.log('✅ Models loaded');
   })
   .catch((error) => {
@@ -40,6 +41,7 @@ const paymentRoutes = require('./routes/paymentRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const progressRoutes = require('./routes/progressRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const feedbackRoutes = require('./routes/feedbackRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', courseRoutes);
@@ -49,6 +51,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/admins', adminRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 
 app.get('/', (req, res) => {
