@@ -10,7 +10,7 @@ const {
   sendEmail,
 } = require('../controllers/adminController');
 
-// All admin routes require admin authentication
+
 // GET /api/admins - Get all admins
 router.get('/', adminAuth, getAllAdmins);
 
