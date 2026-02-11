@@ -11,7 +11,7 @@ const {
 } = require('../controllers/adminController');
 
 
-// GET /api/admins - Get all admins
+// GET /api/admins - Get all admin
 router.get('/', adminAuth, getAllAdmins);
 
 // GET /api/admins/:id - Get single admin
