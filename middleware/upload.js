@@ -10,12 +10,16 @@ if (!fs.existsSync(uploadsDir)) {
 
 const videosDir = path.join(uploadsDir, 'videos');
 const imagesDir = path.join(uploadsDir, 'images');
+const feedbackDir = path.join(uploadsDir, 'feedback');
 
 if (!fs.existsSync(videosDir)) {
   fs.mkdirSync(videosDir, { recursive: true });
 }
 if (!fs.existsSync(imagesDir)) {
   fs.mkdirSync(imagesDir, { recursive: true });
+}
+if (!fs.existsSync(feedbackDir)) {
+  fs.mkdirSync(feedbackDir, { recursive: true });
 }
 
 // Configure storage for videos
@@ -163,6 +167,36 @@ const uploadTutorFiles = multer({
   },
 }).single('image');
 
+// Storage for feedback files
+const feedbackStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, feedbackDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'feedback-' + uniqueSuffix + path.extname(file.originalname));
+  },
+});
+
+// File filter for feedback files (images only)
+const feedbackFileFilter = (req, file, cb) => {
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only JPEG, JPG, and PNG are allowed.'), false);
+  }
+};
+
+// Middleware for feedback file upload
+const uploadFeedbackFile = multer({
+  storage: feedbackStorage,
+  fileFilter: feedbackFileFilter,
+  limits: {
+    fileSize: 2 * 1024 * 1024, // 2MB limit
+  },
+}).single('file');
+
 // Middleware for multiple video uploads (for lessons)
 const uploadMultipleVideos = uploadVideo.fields([
   { name: 'lessonVideos', maxCount: 50 }, // Support up to 50 lessons
@@ -194,5 +228,6 @@ module.exports = {
   uploadThumbnail,
   uploadCourseFiles,
   uploadTutorFiles,
+  uploadFeedbackFile,
   cleanupFiles,
 };

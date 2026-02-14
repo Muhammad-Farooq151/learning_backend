@@ -7,9 +7,10 @@ const {
   createAdmin,
   updateAdmin,
   deleteAdmin,
+  sendEmail,
 } = require('../controllers/adminController');
 
-// All admin routes require admin authentication
+
 // GET /api/admins - Get all admins
 router.get('/', adminAuth, getAllAdmins);
 
@@ -24,5 +25,8 @@ router.put('/:id', adminAuth, updateAdmin);
 
 // DELETE /api/admins/:id - Delete admin
 router.delete('/:id', adminAuth, deleteAdmin);
+
+// POST /api/admin/send-email - Send emails to users
+router.post('/send-email', adminAuth, sendEmail);
 
 module.exports = router;
