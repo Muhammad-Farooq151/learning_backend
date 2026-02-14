@@ -79,13 +79,13 @@ const createAdmin = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create admin
+    // Create admin - ensure role is always 'admin'
     const admin = new User({
       fullName: fullName.trim(),
       email: email.toLowerCase().trim(),
       phoneNumber: phoneNumber.trim(),
       password: hashedPassword,
-      role: 'admin',
+      role: 'admin', // Always set role to 'admin'
       status: status || 'active',
       isEmailVerified: true, // Admins are auto-verified
     });
@@ -127,7 +127,7 @@ const updateAdmin = async (req, res) => {
       });
     }
 
-    // Update fields
+    // Update fields - ensure role remains 'admin' (cannot be changed)
     if (fullName) admin.fullName = fullName.trim();
     if (email) {
       // Check if email is already taken by another user
@@ -152,6 +152,9 @@ const updateAdmin = async (req, res) => {
       const salt = await bcrypt.genSalt(10);
       admin.password = await bcrypt.hash(password, salt);
     }
+    
+    // Ensure role is always 'admin' (cannot be changed)
+    admin.role = 'admin';
 
     await admin.save();
 
