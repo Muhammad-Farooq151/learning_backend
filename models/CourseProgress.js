@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 
+const watchedRangeSchema = new mongoose.Schema({
+  start: { type: Number, required: true }, // Start time in seconds
+  end: { type: Number, required: true },   // End time in seconds
+}, { _id: false });
+
 const lessonProgressSchema = new mongoose.Schema({
   lessonId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -8,7 +13,15 @@ const lessonProgressSchema = new mongoose.Schema({
   },
   watched: {
     type: Number,
-    default: 0, // Time watched in seconds
+    default: 0, // Last watched position (for resume)
+  },
+  watchedSeconds: {
+    type: Number,
+    default: 0, // Total watched seconds (calculated from watchedRanges)
+  },
+  watchedRanges: {
+    type: [watchedRangeSchema],
+    default: [], // Array of {start, end} ranges for accurate tracking
   },
   completed: {
     type: Boolean,
@@ -18,6 +31,15 @@ const lessonProgressSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  lastTimestamp: {
+    type: Date,
+    default: Date.now,
+  },
+  watchSessions: [{
+    startTime: { type: Date, required: true },
+    endTime: { type: Date },
+    duration: { type: Number, default: 0 },
+  }],
 }, { _id: false });
 
 const courseProgressSchema = new mongoose.Schema({

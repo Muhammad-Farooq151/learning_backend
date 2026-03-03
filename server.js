@@ -2,8 +2,20 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
+const server = http.createServer(app);
+
+// Socket.io setup with CORS
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
+});
 
 // Middleware
 app.use(cors());
@@ -31,6 +43,9 @@ mongoose.connect(MONGODB_URI)
   .catch((error) => {
     console.error('❌ MongoDB connection error:', error.message);
   });
+
+// Import models (after mongoose connection is established)
+const CourseProgress = require('./models/CourseProgress');
 
 // Routes (after database connection)
 const authRoutes = require('./routes/authRoutes');
@@ -63,10 +78,363 @@ app.get('/', (req, res) => {
 });
 
 
+// Socket.io connection handling
+const progressTrackingService = require('./services/progressTrackingService');
+
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
+    const user = await progressTrackingService.authenticateSocket(socket, token);
+    socket.user = user;
+    next();
+  } catch (error) {
+    console.error('[Socket.io] Authentication failed:', error.message);
+    next(new Error('Authentication failed'));
+  }
+});
+
+io.on('connection', (socket) => {
+  console.log(`[Socket.io] ✅ User connected: ${socket.user.userId}`);
+
+  // Join user's personal room
+  socket.join(`user_${socket.user.userId}`);
+
+  // Handle video progress tracking
+  socket.on('video:progress', async (data) => {
+    // Reduced logging - only log occasionally to avoid spam
+    if (Math.random() < 0.05) { // Log 5% of events
+      console.log(`[Socket.io] 📹 Progress received from ${socket.user.userId}:`, {
+        lessonId: data.lessonId,
+        currentTime: data.currentTime,
+        isPlaying: data.isPlaying,
+        watchedSegmentsCount: data.watchedSegmentsCount || 0,
+      });
+    }
+    try {
+      const { courseId, lessonId, currentTime, videoDuration, isPlaying, watchedSegments } = data;
+
+      if (!courseId || !lessonId || typeof currentTime !== 'number') {
+        socket.emit('video:progress:error', { message: 'Invalid data' });
+        return;
+      }
+
+      const sessionKey = `${socket.user.userId}_${lessonId}`;
+
+      // Validate progress
+      if (isPlaying) {
+        const session = progressTrackingService.activeSessions.get(sessionKey);
+        
+        if (!session) {
+          // Start new session - track range start from current position
+          progressTrackingService.startSession(sessionKey, currentTime);
+          console.log(`[Socket.io] 🎬 Started new session for ${socket.user.userId}, lesson ${lessonId}, startTime: ${currentTime}`);
+        }
+
+        const validation = progressTrackingService.validateProgress(
+          sessionKey,
+          currentTime,
+          videoDuration
+        );
+
+        if (!validation.valid) {
+          // Invalid progress (skip detected) - don't update
+          socket.emit('video:progress:warning', { 
+            message: 'Invalid progress detected',
+            reason: validation.reason 
+          });
+          return;
+        }
+
+        // Update session (this ensures rangeStart is set)
+        progressTrackingService.updateSession(sessionKey, currentTime, true);
+
+        // Save progress every 3 seconds (throttled) for real-time persistence
+        const updatedSession = progressTrackingService.activeSessions.get(sessionKey);
+        if (updatedSession && Date.now() - updatedSession.lastUpdate > 3000) {
+          // Calculate watched range from session rangeStart to current time
+          // rangeStart should be set when session starts
+          let rangeStart = updatedSession.rangeStart !== undefined && updatedSession.rangeStart !== null
+            ? updatedSession.rangeStart
+            : (updatedSession.lastTime || currentTime);
+          let rangeEnd = currentTime;
+          
+          // If client sent watchedSegments (SCORM-style from Cloudinary), use them to create ranges
+          if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
+            // Convert watched segments array to ranges (optimized)
+            // Example: [0,1,2,3,5,6,7] -> use first and last as range
+            const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
+            if (sortedSegments.length > 0) {
+              // Use first and last watched segments as range
+              rangeStart = sortedSegments[0];
+              rangeEnd = sortedSegments[sortedSegments.length - 1];
+            }
+          }
+          
+          // Only save if range is valid (end > start)
+          if (rangeEnd > rangeStart) {
+            console.log(`[Socket.io] 💾 Saving progress with range (Cloudinary + Socket.io) for ${socket.user.userId}, lesson ${lessonId}:`, {
+              rangeStart: rangeStart.toFixed(2),
+              rangeEnd: rangeEnd.toFixed(2),
+              rangeDuration: (rangeEnd - rangeStart).toFixed(2),
+              currentTime: currentTime.toFixed(2),
+              videoDuration: videoDuration,
+              watchedSegmentsCount: watchedSegments?.length || 0,
+            });
+            
+            const result = await progressTrackingService.saveProgress(
+              socket.user.userId,
+              courseId,
+              lessonId,
+              validation.watchDuration,
+              currentTime,
+              videoDuration,
+              rangeStart,
+              rangeEnd
+            );
+
+            console.log(`[Socket.io] ✅ Progress saved to DB:`, {
+              watched: result.watched,
+              watchedSeconds: result.watchedSeconds,
+              completed: result.completed,
+              progressPercent: result.progressPercent,
+            });
+            
+            // Get watchedRanges from saved progress to send back to client
+            const courseProgress = await CourseProgress.findOne({ 
+              userId: socket.user.userId, 
+              courseId 
+            });
+            let watchedRanges = [];
+            if (courseProgress) {
+              const lessonProgress = courseProgress.lessons.find(
+                l => l.lessonId.toString() === lessonId.toString()
+              );
+              if (lessonProgress && lessonProgress.watchedRanges) {
+                watchedRanges = lessonProgress.watchedRanges;
+              }
+            }
+            
+            socket.emit('video:progress:saved', {
+              ...result,
+              lessonId: lessonId,
+              watchedRanges: watchedRanges,
+            });
+            
+            // Reset range start for next interval (continue tracking from current position)
+            updatedSession.rangeStart = currentTime;
+            updatedSession.lastUpdate = Date.now();
+          }
+        }
+      } else {
+        // Video paused - save the watched range and end session
+        const session = progressTrackingService.activeSessions.get(sessionKey);
+        if (session) {
+          // Calculate final watched range from session start to pause time
+          let rangeStart = session.rangeStart || session.lastTime || currentTime;
+          let rangeEnd = currentTime;
+          
+          // If client sent watchedSegments (SCORM-style from Cloudinary), use them
+          if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
+            const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
+            if (sortedSegments.length > 0) {
+              rangeStart = sortedSegments[0];
+              rangeEnd = sortedSegments[sortedSegments.length - 1];
+            }
+          }
+          
+          const totalWatchDuration = session.watchDuration;
+          
+          console.log(`[Socket.io] 💾 Saving progress on pause with range (Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
+            rangeStart: rangeStart.toFixed(2),
+            rangeEnd: rangeEnd.toFixed(2),
+            currentTime: currentTime,
+            videoDuration: videoDuration,
+            watchedSegmentsCount: watchedSegments?.length || 0,
+          });
+          
+          const result = await progressTrackingService.saveProgress(
+            socket.user.userId,
+            courseId,
+            lessonId,
+            totalWatchDuration,
+            currentTime,
+            videoDuration,
+            rangeStart,
+            rangeEnd
+          );
+          
+          console.log(`[Socket.io] ✅ Progress saved on pause to DB:`, {
+            watched: result.watched,
+            watchedSeconds: result.watchedSeconds,
+            completed: result.completed,
+            progressPercent: result.progressPercent,
+          });
+          
+          // Get watchedRanges from saved progress to send back to client
+          const courseProgress = await CourseProgress.findOne({ 
+            userId: socket.user.userId, 
+            courseId 
+          });
+          let watchedRanges = [];
+          if (courseProgress) {
+            const lessonProgress = courseProgress.lessons.find(
+              l => l.lessonId.toString() === lessonId.toString()
+            );
+            if (lessonProgress && lessonProgress.watchedRanges) {
+              watchedRanges = lessonProgress.watchedRanges;
+            }
+          }
+          
+          socket.emit('video:progress:saved', {
+            ...result,
+            lessonId: lessonId,
+            watchedRanges: watchedRanges,
+          });
+          
+          // End session after saving
+          progressTrackingService.endSession(sessionKey);
+        } else if (currentTime > 0) {
+          // No active session but video was paused with progress - save current position
+          // Handle watchedSegments from client if available (Cloudinary + Socket.io)
+          let finalRangeStart = 0;
+          let finalRangeEnd = currentTime;
+          
+          if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
+            const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
+            if (sortedSegments.length > 0) {
+              finalRangeStart = sortedSegments[0];
+              finalRangeEnd = sortedSegments[sortedSegments.length - 1];
+            }
+          }
+          
+          console.log(`[Socket.io] 💾 Saving progress (no session, Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
+            currentTime: currentTime,
+            videoDuration: videoDuration,
+            watchedSegmentsCount: watchedSegments?.length || 0,
+            rangeStart: finalRangeStart,
+            rangeEnd: finalRangeEnd,
+          });
+          
+          const result = await progressTrackingService.saveProgress(
+            socket.user.userId,
+            courseId,
+            lessonId,
+            0,
+            currentTime,
+            videoDuration,
+            finalRangeStart,
+            finalRangeEnd
+          );
+          
+          console.log(`[Socket.io] ✅ Progress saved (no session) to DB:`, {
+            watched: result.watched,
+            watchedSeconds: result.watchedSeconds,
+            completed: result.completed,
+          });
+          
+          // Get watchedRanges from saved progress to send back to client
+          const courseProgress = await CourseProgress.findOne({ 
+            userId: socket.user.userId, 
+            courseId 
+          });
+          let watchedRanges = [];
+          if (courseProgress) {
+            const lessonProgress = courseProgress.lessons.find(
+              l => l.lessonId.toString() === lessonId.toString()
+            );
+            if (lessonProgress && lessonProgress.watchedRanges) {
+              watchedRanges = lessonProgress.watchedRanges;
+            }
+          }
+          
+          socket.emit('video:progress:saved', {
+            ...result,
+            lessonId: lessonId,
+            watchedRanges: watchedRanges,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('[Socket.io] Error handling progress:', error);
+      socket.emit('video:progress:error', { message: error.message });
+    }
+  });
+
+  // Handle video ended (Cloudinary + Socket.io)
+  socket.on('video:ended', async (data) => {
+    try {
+      const { courseId, lessonId, videoDuration, watchedSegments } = data;
+      const sessionKey = `${socket.user.userId}_${lessonId}`;
+      
+      const totalWatchDuration = progressTrackingService.endSession(sessionKey);
+      
+      // Use watchedSegments if available (SCORM-style from Cloudinary)
+      let finalRangeStart = 0;
+      let finalRangeEnd = videoDuration;
+      
+      if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
+        const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
+        if (sortedSegments.length > 0) {
+          finalRangeStart = sortedSegments[0];
+          finalRangeEnd = sortedSegments[sortedSegments.length - 1];
+        }
+      }
+      
+      const result = await progressTrackingService.saveProgress(
+        socket.user.userId,
+        courseId,
+        lessonId,
+        totalWatchDuration,
+        videoDuration,
+        videoDuration,
+        finalRangeStart,
+        finalRangeEnd
+      );
+      
+      // Get watchedRanges from saved progress to send back to client
+      const courseProgress = await CourseProgress.findOne({ 
+        userId: socket.user.userId, 
+        courseId 
+      });
+      let watchedRanges = [];
+      if (courseProgress) {
+        const lessonProgress = courseProgress.lessons.find(
+          l => l.lessonId.toString() === lessonId.toString()
+        );
+        if (lessonProgress && lessonProgress.watchedRanges) {
+          watchedRanges = lessonProgress.watchedRanges;
+        }
+      }
+
+      socket.emit('video:ended:saved', { 
+        success: true,
+        ...result,
+        lessonId: lessonId,
+        watchedRanges: watchedRanges,
+      });
+    } catch (error) {
+      console.error('[Socket.io] Error handling video end:', error);
+      socket.emit('video:ended:error', { message: error.message });
+    }
+  });
+
+  // Handle disconnect
+  socket.on('disconnect', () => {
+    console.log(`[Socket.io] User disconnected: ${socket.user.userId}`);
+    // Cleanup sessions for this user
+    for (const [key] of progressTrackingService.activeSessions.entries()) {
+      if (key.startsWith(`${socket.user.userId}_`)) {
+        progressTrackingService.activeSessions.delete(key);
+      }
+    }
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log('🚀 Server is running on port', PORT);
   console.log(`📍 http://localhost:${PORT}`);
+  console.log('🔌 Socket.io server is ready');
 });
 
