@@ -46,6 +46,7 @@ const createCourse = async (req, res) => {
     const parsedFaqs = typeof faqs === 'string' ? JSON.parse(faqs) : faqs;
     const parsedLessons = typeof lessons === 'string' ? JSON.parse(lessons) : lessons;
     const parsedKeywords = typeof keywords === 'string' ? JSON.parse(keywords) : keywords;
+    const parsedResources = typeof resources === 'string' ? JSON.parse(resources) : resources;
 
     // Upload thumbnail if provided
     let thumbnailUrl = null;

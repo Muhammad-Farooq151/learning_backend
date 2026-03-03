@@ -1,6 +1,7 @@
 const CourseProgress = require('../models/CourseProgress');
 const User = require('../models/User');
 const Course = require('../models/Course');
+const { calculateWatchedSeconds, getResumeTime } = require('../utils/rangeUtils');
 
 // POST /api/progress/update
 // Update lesson progress for a user and course
@@ -54,14 +55,42 @@ const updateProgress = async (req, res) => {
 
     if (lessonIndex >= 0) {
       // Update existing lesson progress
-      progress.lessons[lessonIndex].watched = watched || progress.lessons[lessonIndex].watched;
-      progress.lessons[lessonIndex].completed = completed !== undefined ? completed : progress.lessons[lessonIndex].completed;
+      const previousWatched = progress.lessons[lessonIndex].watched || 0;
+      
+      // Always update watched (resume position) if provided and is greater
+      if (watched !== undefined && watched !== null) {
+        if (completed === true) {
+          // If marked as completed, set watched to full duration
+          progress.lessons[lessonIndex].watched = watched;
+        } else if (watched > previousWatched) {
+          // Update watched if new value is greater (prevent going backwards)
+          progress.lessons[lessonIndex].watched = watched;
+        }
+      }
+      
+      // Recalculate watchedSeconds from watchedRanges if available
+      if (progress.lessons[lessonIndex].watchedRanges && progress.lessons[lessonIndex].watchedRanges.length > 0) {
+        progress.lessons[lessonIndex].watchedSeconds = calculateWatchedSeconds(progress.lessons[lessonIndex].watchedRanges);
+      }
+      
+      // Update completed status
+      if (completed === true) {
+        progress.lessons[lessonIndex].completed = true;
+        if (watched !== undefined && watched !== null) {
+          progress.lessons[lessonIndex].watched = Math.max(progress.lessons[lessonIndex].watched, watched);
+        }
+      } else if (completed !== undefined) {
+        progress.lessons[lessonIndex].completed = completed;
+      }
+      
       progress.lessons[lessonIndex].lastWatchedAt = new Date();
     } else {
       // Add new lesson progress
       progress.lessons.push({
         lessonId,
         watched: watched || 0,
+        watchedSeconds: 0,
+        watchedRanges: [],
         completed: completed || false,
         lastWatchedAt: new Date(),
       });
@@ -116,9 +145,29 @@ const getProgress = async (req, res) => {
       });
     }
 
+    // Calculate resumeTime and progressPercent for each lesson
+    const lessonsWithResume = progress.lessons.map(lesson => {
+      const watchedSeconds = lesson.watchedRanges && lesson.watchedRanges.length > 0
+        ? calculateWatchedSeconds(lesson.watchedRanges)
+        : (lesson.watchedSeconds || 0);
+      
+      const resumeTime = lesson.watchedRanges && lesson.watchedRanges.length > 0
+        ? getResumeTime(lesson.watchedRanges)
+        : (lesson.watched || 0);
+      
+      return {
+        ...lesson.toObject(),
+        watchedSeconds,
+        resumeTime,
+      };
+    });
+
     res.status(200).json({
       success: true,
-      data: progress,
+      data: {
+        ...progress.toObject(),
+        lessons: lessonsWithResume,
+      },
     });
   } catch (error) {
     console.error('Error fetching progress:', error);
