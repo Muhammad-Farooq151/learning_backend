@@ -80,6 +80,7 @@ app.get('/', (req, res) => {
 
 // Socket.io connection handling
 const progressTrackingService = require('./services/progressTrackingService');
+const { segmentsToRanges } = require('./utils/rangeUtils');
 
 io.use(async (socket, next) => {
   try {
@@ -150,7 +151,7 @@ io.on('connection', (socket) => {
 
         // Save progress every 3 seconds (throttled) for real-time persistence
         const updatedSession = progressTrackingService.activeSessions.get(sessionKey);
-        if (updatedSession && Date.now() - updatedSession.lastUpdate > 3000) {
+        if (updatedSession && Date.now() - (updatedSession.lastPersistAt || 0) > 3000) {
           // Calculate watched range from session rangeStart to current time
           // rangeStart should be set when session starts
           let rangeStart = updatedSession.rangeStart !== undefined && updatedSession.rangeStart !== null
@@ -158,16 +159,10 @@ io.on('connection', (socket) => {
             : (updatedSession.lastTime || currentTime);
           let rangeEnd = currentTime;
           
-          // If client sent watchedSegments (SCORM-style from Cloudinary), use them to create ranges
-          if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
-            // Convert watched segments array to ranges (optimized)
-            // Example: [0,1,2,3,5,6,7] -> use first and last as range
-            const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
-            if (sortedSegments.length > 0) {
-              // Use first and last watched segments as range
-              rangeStart = sortedSegments[0];
-              rangeEnd = sortedSegments[sortedSegments.length - 1];
-            }
+          const watchedRangesFromSegments = segmentsToRanges(watchedSegments);
+          if (watchedRangesFromSegments.length > 0) {
+            rangeStart = watchedRangesFromSegments[0].start;
+            rangeEnd = watchedRangesFromSegments[watchedRangesFromSegments.length - 1].end;
           }
           
           // Only save if range is valid (end > start)
@@ -189,7 +184,8 @@ io.on('connection', (socket) => {
               currentTime,
               videoDuration,
               rangeStart,
-              rangeEnd
+              rangeEnd,
+              watchedRangesFromSegments
             );
 
             console.log(`[Socket.io] ✅ Progress saved to DB:`, {
@@ -222,7 +218,7 @@ io.on('connection', (socket) => {
             
             // Reset range start for next interval (continue tracking from current position)
             updatedSession.rangeStart = currentTime;
-            updatedSession.lastUpdate = Date.now();
+            updatedSession.lastPersistAt = Date.now();
           }
         }
       } else {
@@ -233,13 +229,10 @@ io.on('connection', (socket) => {
           let rangeStart = session.rangeStart || session.lastTime || currentTime;
           let rangeEnd = currentTime;
           
-          // If client sent watchedSegments (SCORM-style from Cloudinary), use them
-          if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
-            const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
-            if (sortedSegments.length > 0) {
-              rangeStart = sortedSegments[0];
-              rangeEnd = sortedSegments[sortedSegments.length - 1];
-            }
+          const watchedRangesFromSegments = segmentsToRanges(watchedSegments);
+          if (watchedRangesFromSegments.length > 0) {
+            rangeStart = watchedRangesFromSegments[0].start;
+            rangeEnd = watchedRangesFromSegments[watchedRangesFromSegments.length - 1].end;
           }
           
           const totalWatchDuration = session.watchDuration;
@@ -260,7 +253,8 @@ io.on('connection', (socket) => {
             currentTime,
             videoDuration,
             rangeStart,
-            rangeEnd
+            rangeEnd,
+            watchedRangesFromSegments
           );
           
           console.log(`[Socket.io] ✅ Progress saved on pause to DB:`, {
@@ -299,12 +293,10 @@ io.on('connection', (socket) => {
           let finalRangeStart = 0;
           let finalRangeEnd = currentTime;
           
-          if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
-            const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
-            if (sortedSegments.length > 0) {
-              finalRangeStart = sortedSegments[0];
-              finalRangeEnd = sortedSegments[sortedSegments.length - 1];
-            }
+          const watchedRangesFromSegments = segmentsToRanges(watchedSegments);
+          if (watchedRangesFromSegments.length > 0) {
+            finalRangeStart = watchedRangesFromSegments[0].start;
+            finalRangeEnd = watchedRangesFromSegments[watchedRangesFromSegments.length - 1].end;
           }
           
           console.log(`[Socket.io] 💾 Saving progress (no session, Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
@@ -323,7 +315,8 @@ io.on('connection', (socket) => {
             currentTime,
             videoDuration,
             finalRangeStart,
-            finalRangeEnd
+            finalRangeEnd,
+            watchedRangesFromSegments
           );
           
           console.log(`[Socket.io] ✅ Progress saved (no session) to DB:`, {
@@ -372,12 +365,10 @@ io.on('connection', (socket) => {
       let finalRangeStart = 0;
       let finalRangeEnd = videoDuration;
       
-      if (watchedSegments && Array.isArray(watchedSegments) && watchedSegments.length > 0) {
-        const sortedSegments = [...new Set(watchedSegments)].sort((a, b) => a - b);
-        if (sortedSegments.length > 0) {
-          finalRangeStart = sortedSegments[0];
-          finalRangeEnd = sortedSegments[sortedSegments.length - 1];
-        }
+      const watchedRangesFromSegments = segmentsToRanges(watchedSegments);
+      if (watchedRangesFromSegments.length > 0) {
+        finalRangeStart = watchedRangesFromSegments[0].start;
+        finalRangeEnd = watchedRangesFromSegments[watchedRangesFromSegments.length - 1].end;
       }
       
       const result = await progressTrackingService.saveProgress(
@@ -388,7 +379,8 @@ io.on('connection', (socket) => {
         videoDuration,
         videoDuration,
         finalRangeStart,
-        finalRangeEnd
+        finalRangeEnd,
+        watchedRangesFromSegments
       );
       
       // Get watchedRanges from saved progress to send back to client
