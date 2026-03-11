@@ -2,6 +2,32 @@ const bcrypt = require('bcrypt');
 const User = require('../models/User');
 const Course = require('../models/Course');
 
+const DEFAULT_EMAIL_PREFERENCES = {
+  courseUpdates: true,
+  promotionsOffers: true,
+  refundStatus: false,
+  recommendedCourses: true,
+};
+
+const normalizeEmailPreferences = (preferences = {}) => ({
+  courseUpdates:
+    typeof preferences.courseUpdates === 'boolean'
+      ? preferences.courseUpdates
+      : DEFAULT_EMAIL_PREFERENCES.courseUpdates,
+  promotionsOffers:
+    typeof preferences.promotionsOffers === 'boolean'
+      ? preferences.promotionsOffers
+      : DEFAULT_EMAIL_PREFERENCES.promotionsOffers,
+  refundStatus:
+    typeof preferences.refundStatus === 'boolean'
+      ? preferences.refundStatus
+      : DEFAULT_EMAIL_PREFERENCES.refundStatus,
+  recommendedCourses:
+    typeof preferences.recommendedCourses === 'boolean'
+      ? preferences.recommendedCourses
+      : DEFAULT_EMAIL_PREFERENCES.recommendedCourses,
+});
+
 // GET /api/users
 // Returns users for admin listing
 const getAllUsers = async (req, res) => {
@@ -15,11 +41,20 @@ const getAllUsers = async (req, res) => {
 
     const users = await User.find(query)
       .sort({ createdAt: -1 })
-      .select('fullName email status role createdAt');
+      .select('fullName email status role createdAt enrolledCourses emailPreferences');
 
     res.status(200).json({
       success: true,
-      data: users,
+      data: users.map((user) => ({
+        _id: user._id,
+        fullName: user.fullName || '',
+        email: user.email || '',
+        status: user.status || 'active',
+        role: user.role || 'user',
+        createdAt: user.createdAt,
+        enrolledCourses: Array.isArray(user.enrolledCourses) ? user.enrolledCourses : [],
+        emailPreferences: normalizeEmailPreferences(user.emailPreferences),
+      })),
     });
   } catch (error) {
     console.error('Error fetching users:', error);
@@ -44,7 +79,7 @@ const getProfile = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).select('fullName email phoneNumber createdAt');
+    const user = await User.findById(userId).select('fullName email phoneNumber createdAt emailPreferences');
 
     if (!user) {
       return res.status(404).json({
@@ -61,6 +96,7 @@ const getProfile = async (req, res) => {
         email: user.email || '',
         phoneNumber: user.phoneNumber || '',
         createdAt: user.createdAt,
+        emailPreferences: normalizeEmailPreferences(user.emailPreferences),
       },
     });
   } catch (error) {
@@ -104,7 +140,7 @@ const updateProfile = async (req, res) => {
         new: true,
         runValidators: true,
       }
-    ).select('fullName email phoneNumber createdAt');
+    ).select('fullName email phoneNumber createdAt emailPreferences');
 
     if (!user) {
       return res.status(404).json({
@@ -121,6 +157,7 @@ const updateProfile = async (req, res) => {
         email: user.email || '',
         phoneNumber: user.phoneNumber || '',
         createdAt: user.createdAt,
+        emailPreferences: normalizeEmailPreferences(user.emailPreferences),
       },
     });
   } catch (error) {
@@ -128,6 +165,62 @@ const updateProfile = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error updating profile',
+      error: error.message,
+    });
+  }
+};
+
+// PUT /api/users/notification-preferences
+// Update user email notification preferences
+const updateNotificationPreferences = async (req, res) => {
+  try {
+    const { userId, emailPreferences } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User id is required',
+      });
+    }
+
+    const normalizedPreferences = normalizeEmailPreferences(emailPreferences);
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        emailPreferences: normalizedPreferences,
+        updatedAt: new Date(),
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).select('fullName email phoneNumber createdAt emailPreferences');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Notification preferences updated successfully',
+      user: {
+        id: user._id.toString(),
+        fullName: user.fullName || '',
+        email: user.email || '',
+        phoneNumber: user.phoneNumber || '',
+        createdAt: user.createdAt,
+        emailPreferences: normalizeEmailPreferences(user.emailPreferences),
+      },
+    });
+  } catch (error) {
+    console.error('Error updating notification preferences:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating notification preferences',
       error: error.message,
     });
   }
@@ -425,6 +518,7 @@ module.exports = {
   getAllUsers,
   getProfile,
   updateProfile,
+  updateNotificationPreferences,
   updatePassword,
   enrollInCourse,
   getMyCourses,

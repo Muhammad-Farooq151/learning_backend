@@ -5,6 +5,7 @@ const {
   getAllUsers,
   getProfile,
   updateProfile,
+  updateNotificationPreferences,
   updatePassword,
   enrollInCourse,
   getMyCourses,
@@ -19,6 +20,9 @@ router.post('/profile', getProfile);
 
 // PUT /api/users/profile - Update user profile
 router.put('/profile', updateProfile);
+
+// PUT /api/users/notification-preferences - Update user notification preferences
+router.put('/notification-preferences', updateNotificationPreferences);
 
 // PUT /api/users/password - Update user password
 router.put('/password', updatePassword);
