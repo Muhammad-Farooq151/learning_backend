@@ -5,6 +5,7 @@ const {
   getAllUsers,
   getProfile,
   updateProfile,
+  updatePassword,
   enrollInCourse,
   getMyCourses,
   getDashboardStats,
@@ -18,6 +19,9 @@ router.post('/profile', getProfile);
 
 // PUT /api/users/profile - Update user profile
 router.put('/profile', updateProfile);
+
+// PUT /api/users/password - Update user password
+router.put('/password', updatePassword);
 
 // POST /api/users/enroll - Enroll user in a course after payment
 router.post('/enroll', enrollInCourse);
