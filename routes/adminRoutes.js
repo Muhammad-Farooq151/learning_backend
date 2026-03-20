@@ -7,8 +7,17 @@ const {
   createAdmin,
   updateAdmin,
   deleteAdmin,
+  getEmailTemplates,
+  createEmailTemplate,
+  getEmailLogs,
   sendEmail,
 } = require('../controllers/adminController');
+
+// Email management routes
+router.get('/email-templates', adminAuth, getEmailTemplates);
+router.post('/email-templates', adminAuth, createEmailTemplate);
+router.get('/email-logs', adminAuth, getEmailLogs);
+router.post('/send-email', adminAuth, sendEmail);
 
 
 // GET /api/admins - Get all admin
@@ -25,8 +34,5 @@ router.put('/:id', adminAuth, updateAdmin);
 
 // DELETE /api/admins/:id - Delete admin
 router.delete('/:id', adminAuth, deleteAdmin);
-
-// POST /api/admin/send-email - Send emails to users
-router.post('/send-email', adminAuth, sendEmail);
 
 module.exports = router;

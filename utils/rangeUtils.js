@@ -45,7 +45,19 @@ function calculateWatchedSeconds(ranges) {
   if (!ranges || ranges.length === 0) return 0;
   
   return ranges.reduce((total, range) => {
-    return total + (range.end - range.start);
+    const start = Number(range.start);
+    const end = Number(range.end);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+      return total;
+    }
+
+    // Integer ranges coming from watched second segments are inclusive.
+    if (Number.isInteger(start) && Number.isInteger(end)) {
+      return total + (end - start + 1);
+    }
+
+    return total + (end - start);
   }, 0);
 }
 
@@ -63,6 +75,41 @@ function addWatchedRange(existingRanges, start, end) {
   const allRanges = [...(existingRanges || []), newRange];
   
   return mergeRanges(allRanges);
+}
+
+/**
+ * Convert discrete watched segments into contiguous ranges
+ * @param {Number[]} segments - Array of watched second markers
+ * @returns {Array} - Array of {start, end} ranges
+ */
+function segmentsToRanges(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return [];
+
+  const sorted = [...new Set(segments)]
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+
+  if (sorted.length === 0) return [];
+
+  const ranges = [];
+  let start = sorted[0];
+  let end = sorted[0];
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i];
+
+    if (current <= end + 1) {
+      end = current;
+      continue;
+    }
+
+    ranges.push({ start, end });
+    start = current;
+    end = current;
+  }
+
+  ranges.push({ start, end });
+  return ranges;
 }
 
 /**
@@ -101,6 +148,7 @@ module.exports = {
   mergeRanges,
   calculateWatchedSeconds,
   addWatchedRange,
+  segmentsToRanges,
   isRangeWatched,
   getResumeTime,
 };
