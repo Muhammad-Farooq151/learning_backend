@@ -47,8 +47,8 @@ const feedbackSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Index for efficient queries
-feedbackSchema.index({ userId: 1, courseId: 1 });
+// One user can submit only one feedback per course
+feedbackSchema.index({ userId: 1, courseId: 1 }, { unique: true });
 
 const Feedback = mongoose.model('Feedback', feedbackSchema);
 

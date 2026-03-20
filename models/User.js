@@ -1,5 +1,27 @@
 const mongoose = require('mongoose');
 
+const emailPreferencesSchema = new mongoose.Schema(
+  {
+    courseUpdates: {
+      type: Boolean,
+      default: true,
+    },
+    promotionsOffers: {
+      type: Boolean,
+      default: true,
+    },
+    refundStatus: {
+      type: Boolean,
+      default: false,
+    },
+    recommendedCourses: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { _id: false }
+);
+
 const userSchema = new mongoose.Schema({
   fullName: {
     type: String,
@@ -46,6 +68,15 @@ const userSchema = new mongoose.Schema({
       ref: 'Course',
     },
   ],
+  emailPreferences: {
+    type: emailPreferencesSchema,
+    default: () => ({
+      courseUpdates: true,
+      promotionsOffers: true,
+      refundStatus: false,
+      recommendedCourses: true,
+    }),
+  },
 }, {
   timestamps: true,
 });

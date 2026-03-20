@@ -1,9 +1,8 @@
 const Feedback = require('../models/Feedback');
 const User = require('../models/User');
 const Course = require('../models/Course');
-const { uploadFileToCloudinary } = require('../config/cloudinary');
+const { uploadImageToCloudinary } = require('../config/cloudinary');
 const fs = require('fs');
-const path = require('path');
 
 // POST /api/feedback
 // Submit feedback for a course
@@ -85,11 +84,11 @@ const submitFeedback = async (req, res) => {
     let fileUrl = null;
     let filePublicId = null;
 
-    // Handle file upload if present
+    // Handle image upload if present
     if (req.file) {
       try {
         const filePath = req.file.path;
-        const uploadResult = await uploadFileToCloudinary(filePath, 'feedback/images');
+        const uploadResult = await uploadImageToCloudinary(filePath, 'feedback/images');
         
         fileUrl = uploadResult.url;
         filePublicId = uploadResult.publicId;
@@ -104,7 +103,11 @@ const submitFeedback = async (req, res) => {
         if (req.file.path && fs.existsSync(req.file.path)) {
           fs.unlinkSync(req.file.path);
         }
-        // Continue without file - feedback can still be submitted
+        return res.status(500).json({
+          success: false,
+          message: 'Image upload failed. Please try again.',
+          error: uploadError.message,
+        });
       }
     }
 
@@ -136,6 +139,16 @@ const submitFeedback = async (req, res) => {
       },
     });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already submitted feedback for this course',
+        data: {
+          existing: true,
+        },
+      });
+    }
+
     console.error('Error submitting feedback:', error);
     
     // Clean up uploaded file if error occurs

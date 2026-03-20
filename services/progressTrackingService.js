@@ -9,7 +9,7 @@ const { mergeRanges, calculateWatchedSeconds, addWatchedRange, getResumeTime } =
  */
 class ProgressTrackingService {
   constructor() {
-    // Store active sessions: { userId_lessonId: { startTime, lastTime, lastUpdate, watchDuration } }
+    // Store active sessions: { userId_lessonId: { startTime, lastTime, lastActivityAt, lastPersistAt, watchDuration } }
     this.activeSessions = new Map();
     
     // Cleanup inactive sessions after 5 minutes
@@ -61,7 +61,7 @@ class ProgressTrackingService {
     }
 
     const now = Date.now();
-    const timeSinceLastUpdate = (now - session.lastUpdate) / 1000; // seconds
+    const timeSinceLastUpdate = (now - session.lastActivityAt) / 1000; // seconds
     const timeDifference = currentTime - session.lastTime; // Can be positive (forward) or negative (backward)
 
     // Only detect forward progress (ignore backward seeking for now, it's allowed)
@@ -127,7 +127,8 @@ class ProgressTrackingService {
     this.activeSessions.set(sessionKey, {
       startTime: Date.now(),
       lastTime: currentTime,
-      lastUpdate: Date.now(),
+      lastActivityAt: Date.now(),
+      lastPersistAt: 0,
       watchDuration: 0,
       isPlaying: true,
       rangeStart: currentTime, // Track range start for watchedRanges - CRITICAL for accurate tracking
@@ -142,7 +143,7 @@ class ProgressTrackingService {
     const session = this.activeSessions.get(sessionKey);
     if (session) {
       session.lastTime = currentTime;
-      session.lastUpdate = Date.now();
+      session.lastActivityAt = Date.now();
       session.isPlaying = isPlaying;
       // Keep rangeStart if already set, otherwise initialize it
       if (session.rangeStart === undefined || session.rangeStart === null) {
@@ -172,7 +173,7 @@ class ProgressTrackingService {
     const inactiveThreshold = 5 * 60 * 1000; // 5 minutes
 
     for (const [key, session] of this.activeSessions.entries()) {
-      if (now - session.lastUpdate > inactiveThreshold) {
+      if (now - session.lastActivityAt > inactiveThreshold) {
         console.log(`[ProgressTracking] Cleaning up inactive session: ${key}`);
         this.activeSessions.delete(key);
       }
@@ -182,8 +183,29 @@ class ProgressTrackingService {
   /**
    * Save progress to database using watchedRanges (Professional LMS-style)
    */
-  async saveProgress(userId, courseId, lessonId, watchedSeconds, currentTime, videoDuration, rangeStart = null, rangeEnd = null) {
+  async saveProgress(
+    userId,
+    courseId,
+    lessonId,
+    watchedSeconds,
+    currentTime,
+    videoDuration,
+    rangeStart = null,
+    rangeEnd = null,
+    watchedRangesInput = []
+  ) {
     try {
+      const normalizeRanges = (ranges = []) =>
+        mergeRanges(
+          ranges
+            .filter((range) => Number.isFinite(range?.start) && Number.isFinite(range?.end))
+            .map((range) => ({
+              start: Math.max(0, Math.min(range.start, videoDuration)),
+              end: Math.max(0, Math.min(range.end, videoDuration)),
+            }))
+            .filter((range) => range.end > range.start)
+        );
+
       // Find or create course progress
       let courseProgress = await CourseProgress.findOne({ userId, courseId });
 
@@ -214,17 +236,27 @@ class ProgressTrackingService {
         courseProgress.lessons.push(lessonProgress);
       }
 
+      lessonProgress.watchedRanges = normalizeRanges(lessonProgress.watchedRanges || []);
+
       // Update watched (resume position) - always update to current position
       const newWatched = Math.min(currentTime, videoDuration);
       lessonProgress.watched = newWatched;
       
-      // Add watched range if provided (for accurate tracking)
-      if (rangeStart !== null && rangeEnd !== null && rangeStart < rangeEnd) {
+      // Prefer full watched ranges from client when available
+      if (Array.isArray(watchedRangesInput) && watchedRangesInput.length > 0) {
+        lessonProgress.watchedRanges = normalizeRanges([
+          ...(lessonProgress.watchedRanges || []),
+          ...watchedRangesInput,
+        ]);
+        lessonProgress.watchedSeconds = calculateWatchedSeconds(lessonProgress.watchedRanges);
+      } else if (rangeStart !== null && rangeEnd !== null && rangeStart < rangeEnd) {
         // Add the new watched range and merge with existing ranges
-        lessonProgress.watchedRanges = addWatchedRange(
-          lessonProgress.watchedRanges || [],
-          rangeStart,
-          rangeEnd
+        lessonProgress.watchedRanges = normalizeRanges(
+          addWatchedRange(
+            lessonProgress.watchedRanges || [],
+            Math.max(0, Math.min(rangeStart, videoDuration)),
+            Math.max(0, Math.min(rangeEnd, videoDuration))
+          )
         );
         
         // Recalculate watchedSeconds from merged ranges
