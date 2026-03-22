@@ -78,6 +78,24 @@ app.get('/', (req, res) => {
 });
 
 
+// ============================================================
+// ✅ ADDED: Health Check Endpoint (Required for Cloud Run)
+// Cloud Run uses this to verify the container is alive.
+// Must return 200 OK — do not remove this route.
+// ============================================================
+app.get('/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  res.status(200).json({
+    status: 'healthy',
+    project: 'learning-hub',
+    database: dbStatus,
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+  });
+});
+// ============================================================
+
+
 // Socket.io connection handling
 const progressTrackingService = require('./services/progressTrackingService');
 const { segmentsToRanges } = require('./utils/rangeUtils');
@@ -422,7 +440,13 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+// ============================================================
+// ✅ UPDATED: PORT changed from 5000 to 8080 for Cloud Run
+// Cloud Run requires the app to listen on PORT env variable.
+// Original line was: const PORT = process.env.PORT || 5000;
+// ============================================================
+const PORT = process.env.PORT || 8080;
+// ============================================================
 
 server.listen(PORT, () => {
   console.log('🚀 Server is running on port', PORT);
@@ -430,3 +454,19 @@ server.listen(PORT, () => {
   console.log('🔌 Socket.io server is ready');
 });
 
+// ============================================================
+// ✅ ADDED: Graceful Shutdown Handler (Required for Cloud Run)
+// Cloud Run sends SIGTERM before shutting down a container.
+// This ensures active connections close cleanly before exit.
+// ============================================================
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received — shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ HTTP server closed');
+    mongoose.connection.close(false, () => {
+      console.log('✅ MongoDB connection closed');
+      process.exit(0);
+    });
+  });
+});
+// ============================================================
