@@ -1,28 +1,279 @@
+// const multer = require('multer');
+// const path = require('path');
+// const fs = require('fs');
+
+// // Create uploads directory if it doesn't exist
+// const uploadsDir = path.join(__dirname, '../uploads');
+// if (!fs.existsSync(uploadsDir)) {
+//   fs.mkdirSync(uploadsDir, { recursive: true });
+// }
+
+// const videosDir = path.join(uploadsDir, 'videos');
+// const imagesDir = path.join(uploadsDir, 'images');
+// const feedbackDir = path.join(uploadsDir, 'feedback');
+
+// if (!fs.existsSync(videosDir)) {
+//   fs.mkdirSync(videosDir, { recursive: true });
+// }
+// if (!fs.existsSync(imagesDir)) {
+//   fs.mkdirSync(imagesDir, { recursive: true });
+// }
+// if (!fs.existsSync(feedbackDir)) {
+//   fs.mkdirSync(feedbackDir, { recursive: true });
+// }
+
+// // Configure storage for videos
+// const videoStorage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     cb(null, videosDir);
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+//     cb(null, 'video-' + uniqueSuffix + path.extname(file.originalname));
+//   },
+// });
+
+// // Configure storage for images
+// const imageStorage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     cb(null, imagesDir);
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+//     cb(null, 'image-' + uniqueSuffix + path.extname(file.originalname));
+//   },
+// });
+
+// // File filter for videos
+// const videoFileFilter = (req, file, cb) => {
+//   const allowedMimes = ['video/mp4', 'video/mov', 'video/avi', 'video/quicktime'];
+//   if (allowedMimes.includes(file.mimetype)) {
+//     cb(null, true);
+//   } else {
+//     cb(new Error('Invalid video file type. Only MP4, MOV, and AVI are allowed.'), false);
+//   }
+// };
+
+// // File filter for images
+// const imageFileFilter = (req, file, cb) => {
+//   const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+//   if (allowedMimes.includes(file.mimetype)) {
+//     cb(null, true);
+//   } else {
+//     cb(new Error('Invalid image file type. Only JPEG and PNG are allowed.'), false);
+//   }
+// };
+
+// // Multer instance for videos
+// const uploadVideo = multer({
+//   storage: videoStorage,
+//   fileFilter: videoFileFilter,
+//   limits: {
+//     fileSize: 800 * 1024 * 1024, // 800MB limit
+//   },
+// });
+
+// // Multer instance for images
+// const uploadImage = multer({
+//   storage: imageStorage,
+//   fileFilter: imageFileFilter,
+//   limits: {
+//     fileSize: 10 * 1024 * 1024, // 10MB limit
+//   },
+// });
+
+// // Create resources directory if it doesn't exist
+// const resourcesDir = path.join(uploadsDir, 'resources');
+// if (!fs.existsSync(resourcesDir)) {
+//   fs.mkdirSync(resourcesDir, { recursive: true });
+// }
+
+// // Combined storage that routes files based on field name
+// const combinedStorage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     if (file.fieldname === 'thumbnail') {
+//       cb(null, imagesDir);
+//     } else if (file.fieldname === 'lessonVideos') {
+//       cb(null, videosDir);
+//     } else if (file.fieldname === 'resourceFiles') {
+//       cb(null, resourcesDir);
+//     } else {
+//       cb(null, uploadsDir);
+//     }
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+//     if (file.fieldname === 'thumbnail') {
+//       cb(null, 'image-' + uniqueSuffix + path.extname(file.originalname));
+//     } else if (file.fieldname === 'lessonVideos') {
+//       cb(null, 'video-' + uniqueSuffix + path.extname(file.originalname));
+//     } else if (file.fieldname === 'resourceFiles') {
+//       cb(null, 'resource-' + uniqueSuffix + path.extname(file.originalname));
+//     } else {
+//       cb(null, 'file-' + uniqueSuffix + path.extname(file.originalname));
+//     }
+//   },
+// });
+
+// // Combined file filter
+// const combinedFileFilter = (req, file, cb) => {
+//   if (file.fieldname === 'thumbnail') {
+//     const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+//     if (allowedMimes.includes(file.mimetype)) {
+//       cb(null, true);
+//     } else {
+//       cb(new Error('Invalid image file type. Only JPEG and PNG are allowed.'), false);
+//     }
+//   } else if (file.fieldname === 'lessonVideos') {
+//     const allowedMimes = ['video/mp4', 'video/mov', 'video/avi', 'video/quicktime'];
+//     if (allowedMimes.includes(file.mimetype)) {
+//       cb(null, true);
+//     } else {
+//       cb(new Error('Invalid video file type. Only MP4, MOV, and AVI are allowed.'), false);
+//     }
+//   } else if (file.fieldname === 'resourceFiles') {
+//     // Allow PDF, JPEG, PNG for resources
+//     const allowedMimes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+//     if (allowedMimes.includes(file.mimetype)) {
+//       cb(null, true);
+//     } else {
+//       cb(new Error('Invalid resource file type. Only PDF, JPEG, and PNG are allowed.'), false);
+//     }
+//   } else {
+//     // Reject unexpected file fields (but allow text fields which won't reach here)
+//     cb(new Error(`Unexpected file field: ${file.fieldname}`), false);
+//   }
+// };
+
+// // Combined multer instance
+// const uploadCombined = multer({
+//   storage: combinedStorage,
+//   fileFilter: combinedFileFilter,
+//   limits: {
+//     fileSize: 800 * 1024 * 1024, // 800MB limit for videos (resources have 10MB limit in frontend)
+//   },
+// });
+
+// // Middleware for course upload (thumbnail + lesson videos + other fields)
+// // Using .any() to accept all fields, then we'll filter in the controller
+// const uploadCourseFiles = uploadCombined.any();
+
+// // Middleware for tutor image upload
+// const uploadTutorFiles = multer({
+//   storage: imageStorage,
+//   fileFilter: imageFileFilter,
+//   limits: {
+//     fileSize: 10 * 1024 * 1024, // 10MB limit
+//   },
+// }).single('image');
+
+// // Storage for feedback files
+// const feedbackStorage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     cb(null, feedbackDir);
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+//     cb(null, 'feedback-' + uniqueSuffix + path.extname(file.originalname));
+//   },
+// });
+
+// // File filter for feedback files (images only)
+// const feedbackFileFilter = (req, file, cb) => {
+//   const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+//   if (allowedMimes.includes(file.mimetype)) {
+//     cb(null, true);
+//   } else {
+//     cb(new Error('Invalid file type. Only JPEG, JPG, and PNG are allowed.'), false);
+//   }
+// };
+
+// // Middleware for feedback file upload
+// const uploadFeedbackFile = multer({
+//   storage: feedbackStorage,
+//   fileFilter: feedbackFileFilter,
+//   limits: {
+//     fileSize: 2 * 1024 * 1024, // 2MB limit
+//   },
+// }).single('file');
+
+// // Middleware for multiple video uploads (for lessons)
+// const uploadMultipleVideos = uploadVideo.fields([
+//   { name: 'lessonVideos', maxCount: 50 }, // Support up to 50 lessons
+// ]);
+
+// // Middleware for single image upload (for thumbnail)
+// const uploadThumbnail = uploadImage.single('thumbnail');
+
+// // Helper function to clean up uploaded files
+// const cleanupFiles = (files) => {
+//   if (!files) return;
+  
+//   const fileArray = Array.isArray(files) ? files : [files];
+//   fileArray.forEach(file => {
+//     if (file && file.path && fs.existsSync(file.path)) {
+//       try {
+//         fs.unlinkSync(file.path);
+//       } catch (error) {
+//         console.error('Error deleting file:', error);
+//       }
+//     }
+//   });
+// };
+
+// module.exports = {
+//   uploadVideo,
+//   uploadImage,
+//   uploadMultipleVideos,
+//   uploadThumbnail,
+//   uploadCourseFiles,
+//   uploadTutorFiles,
+//   uploadFeedbackFile,
+//   cleanupFiles,
+// };
+
+
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// ============================================================
+// ✅ CRITICAL FIX: Use /tmp/uploads instead of /app/uploads
+// Cloud Run containers are READ-ONLY except for /tmp
+// Writing to /app causes EACCES permission denied crash
+// Original: path.join(__dirname, '../uploads')
+// ============================================================
+const uploadsDir = process.env.NODE_ENV === 'production'
+  ? '/tmp/uploads'
+  : path.join(__dirname, '../uploads');
 
-const videosDir = path.join(uploadsDir, 'videos');
-const imagesDir = path.join(uploadsDir, 'images');
-const feedbackDir = path.join(uploadsDir, 'feedback');
+// ✅ FIX: Safely create directories without crashing the app
+const createDirSafely = (dirPath) => {
+  if (!fs.existsSync(dirPath)) {
+    try {
+      fs.mkdirSync(dirPath, { recursive: true });
+      console.log(`✅ Directory created: ${dirPath}`);
+    } catch (error) {
+      console.error(`⚠️ Could not create directory ${dirPath}:`, error.message);
+    }
+  }
+};
 
-if (!fs.existsSync(videosDir)) {
-  fs.mkdirSync(videosDir, { recursive: true });
-}
-if (!fs.existsSync(imagesDir)) {
-  fs.mkdirSync(imagesDir, { recursive: true });
-}
-if (!fs.existsSync(feedbackDir)) {
-  fs.mkdirSync(feedbackDir, { recursive: true });
-}
+// Create all required directories safely
+const videosDir    = path.join(uploadsDir, 'videos');
+const imagesDir    = path.join(uploadsDir, 'images');
+const feedbackDir  = path.join(uploadsDir, 'feedback');
+const resourcesDir = path.join(uploadsDir, 'resources');
 
+createDirSafely(uploadsDir);
+createDirSafely(videosDir);
+createDirSafely(imagesDir);
+createDirSafely(feedbackDir);
+createDirSafely(resourcesDir);
+
+// ============================================================
 // Configure storage for videos
+// ============================================================
 const videoStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, videosDir);
@@ -33,7 +284,9 @@ const videoStorage = multer.diskStorage({
   },
 });
 
+// ============================================================
 // Configure storage for images
+// ============================================================
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, imagesDir);
@@ -44,7 +297,9 @@ const imageStorage = multer.diskStorage({
   },
 });
 
+// ============================================================
 // File filter for videos
+// ============================================================
 const videoFileFilter = (req, file, cb) => {
   const allowedMimes = ['video/mp4', 'video/mov', 'video/avi', 'video/quicktime'];
   if (allowedMimes.includes(file.mimetype)) {
@@ -54,7 +309,9 @@ const videoFileFilter = (req, file, cb) => {
   }
 };
 
+// ============================================================
 // File filter for images
+// ============================================================
 const imageFileFilter = (req, file, cb) => {
   const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
   if (allowedMimes.includes(file.mimetype)) {
@@ -64,7 +321,9 @@ const imageFileFilter = (req, file, cb) => {
   }
 };
 
+// ============================================================
 // Multer instance for videos
+// ============================================================
 const uploadVideo = multer({
   storage: videoStorage,
   fileFilter: videoFileFilter,
@@ -73,7 +332,9 @@ const uploadVideo = multer({
   },
 });
 
+// ============================================================
 // Multer instance for images
+// ============================================================
 const uploadImage = multer({
   storage: imageStorage,
   fileFilter: imageFileFilter,
@@ -82,13 +343,9 @@ const uploadImage = multer({
   },
 });
 
-// Create resources directory if it doesn't exist
-const resourcesDir = path.join(uploadsDir, 'resources');
-if (!fs.existsSync(resourcesDir)) {
-  fs.mkdirSync(resourcesDir, { recursive: true });
-}
-
+// ============================================================
 // Combined storage that routes files based on field name
+// ============================================================
 const combinedStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     if (file.fieldname === 'thumbnail') {
@@ -115,7 +372,9 @@ const combinedStorage = multer.diskStorage({
   },
 });
 
+// ============================================================
 // Combined file filter
+// ============================================================
 const combinedFileFilter = (req, file, cb) => {
   if (file.fieldname === 'thumbnail') {
     const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
@@ -140,25 +399,28 @@ const combinedFileFilter = (req, file, cb) => {
       cb(new Error('Invalid resource file type. Only PDF, JPEG, and PNG are allowed.'), false);
     }
   } else {
-    // Reject unexpected file fields (but allow text fields which won't reach here)
+    // Reject unexpected file fields
     cb(new Error(`Unexpected file field: ${file.fieldname}`), false);
   }
 };
 
+// ============================================================
 // Combined multer instance
+// ============================================================
 const uploadCombined = multer({
   storage: combinedStorage,
   fileFilter: combinedFileFilter,
   limits: {
-    fileSize: 800 * 1024 * 1024, // 800MB limit for videos (resources have 10MB limit in frontend)
+    fileSize: 800 * 1024 * 1024, // 800MB limit
   },
 });
 
 // Middleware for course upload (thumbnail + lesson videos + other fields)
-// Using .any() to accept all fields, then we'll filter in the controller
 const uploadCourseFiles = uploadCombined.any();
 
+// ============================================================
 // Middleware for tutor image upload
+// ============================================================
 const uploadTutorFiles = multer({
   storage: imageStorage,
   fileFilter: imageFileFilter,
@@ -167,7 +429,9 @@ const uploadTutorFiles = multer({
   },
 }).single('image');
 
+// ============================================================
 // Storage for feedback files
+// ============================================================
 const feedbackStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, feedbackDir);
@@ -178,7 +442,9 @@ const feedbackStorage = multer.diskStorage({
   },
 });
 
+// ============================================================
 // File filter for feedback files (images only)
+// ============================================================
 const feedbackFileFilter = (req, file, cb) => {
   const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
   if (allowedMimes.includes(file.mimetype)) {
@@ -188,7 +454,9 @@ const feedbackFileFilter = (req, file, cb) => {
   }
 };
 
+// ============================================================
 // Middleware for feedback file upload
+// ============================================================
 const uploadFeedbackFile = multer({
   storage: feedbackStorage,
   fileFilter: feedbackFileFilter,
@@ -197,18 +465,24 @@ const uploadFeedbackFile = multer({
   },
 }).single('file');
 
+// ============================================================
 // Middleware for multiple video uploads (for lessons)
+// ============================================================
 const uploadMultipleVideos = uploadVideo.fields([
-  { name: 'lessonVideos', maxCount: 50 }, // Support up to 50 lessons
+  { name: 'lessonVideos', maxCount: 50 },
 ]);
 
+// ============================================================
 // Middleware for single image upload (for thumbnail)
+// ============================================================
 const uploadThumbnail = uploadImage.single('thumbnail');
 
+// ============================================================
 // Helper function to clean up uploaded files
+// ============================================================
 const cleanupFiles = (files) => {
   if (!files) return;
-  
+
   const fileArray = Array.isArray(files) ? files : [files];
   fileArray.forEach(file => {
     if (file && file.path && fs.existsSync(file.path)) {
