@@ -44,6 +44,11 @@ steps:
   - --cpu=1
   - --min-instances=1
   - --max-instances=10
+  # ✅ ADDED: Extended request timeout (10 mins for long operations)
+  - --timeout=600
+  # ✅ ADDED: Extra CPU during container startup to boot faster
+  - --cpu-boost
+  # ✅ ADDED: All secrets from Secret Manager
   - --set-secrets=MONGODB_URI=MONGODB_URI:latest
   - --set-secrets=JWT_SECRET=JWT_SECRET:latest
   - --set-secrets=DATABASE_NAME=DATABASE_NAME:latest
@@ -54,6 +59,7 @@ steps:
   - --set-secrets=STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest
   - --set-secrets=SMTP_HOST=SMTP_HOST:latest
   - --set-secrets=SMTP_PORT=SMTP_PORT:latest
+  # ✅ ADDED: Production environment variable
   - --set-env-vars=NODE_ENV=production
   waitFor: [ "push" ]
 

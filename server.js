@@ -25,12 +25,30 @@ app.use(express.urlencoded({ extended: true }));
 // Database connection (must be before routes to ensure models are loaded)
 const MONGODB_URI = process.env.MONGODB_URI || `mongodb://localhost:27017/${process.env.DATABASE_NAME || 'learninghub'}`;
 
+// mongoose.connect(MONGODB_URI)
+//   .then(() => {
+//     console.log('✅ MongoDB connected successfully');
+//     console.log(`📦 Database: ${process.env.DATABASE_NAME || 'learninghub'}`);
+    
+//     // Ensure models are loaded
+//     require('./models/User');
+//     require('./models/VerificationToken');
+//     require('./models/Course');
+//     require('./models/Tutor');
+//     require('./models/Transaction');
+//     require('./models/CourseProgress');
+//     require('./models/Feedback');
+//     console.log('✅ Models loaded');
+//   })
+//   .catch((error) => {
+//     console.error('❌ MongoDB connection error:', error.message);
+//   });
+
+
 mongoose.connect(MONGODB_URI)
   .then(() => {
     console.log('✅ MongoDB connected successfully');
     console.log(`📦 Database: ${process.env.DATABASE_NAME || 'learninghub'}`);
-    
-    // Ensure models are loaded
     require('./models/User');
     require('./models/VerificationToken');
     require('./models/Course');
@@ -42,6 +60,8 @@ mongoose.connect(MONGODB_URI)
   })
   .catch((error) => {
     console.error('❌ MongoDB connection error:', error.message);
+    // ✅ ADDED: Exit process so Cloud Run knows it failed
+    process.exit(1);
   });
 
 // Import models (after mongoose connection is established)
