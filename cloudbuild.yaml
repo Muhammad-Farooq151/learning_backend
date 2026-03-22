@@ -4,7 +4,7 @@ substitutions:
   _REPOSITORY: learning-hub
 
 steps:
-- name: "node:18-alpine"
+- name: "node:20-alpine"
   id: "install"
   entrypoint: npm
   args: [ "ci" ]
