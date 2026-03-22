@@ -59,6 +59,9 @@ steps:
   - --set-secrets=STRIPE_SECRET_KEY=STRIPE_SECRET_KEY:latest
   - --set-secrets=SMTP_HOST=SMTP_HOST:latest
   - --set-secrets=SMTP_PORT=SMTP_PORT:latest
+  # ✅ ADD THESE TWO NEW LINES
+  - --set-secrets=SMTP_USER=SMTP_USER:latest
+  - --set-secrets=SMTP_PASS=SMTP_PASS:latest
   # ✅ ADDED: Production environment variable
   - --set-env-vars=NODE_ENV=production
   waitFor: [ "push" ]
