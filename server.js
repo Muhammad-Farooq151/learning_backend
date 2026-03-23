@@ -504,7 +504,8 @@ const server = http.createServer(app);
 // Socket.io setup with CORS
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    // origin: process.env.FRONTEND_URL || 'http://localhost:3000' ,
+    origin: ['https://stage.vixhunter.com', 'https://vixhunter.com'],
     methods: ['GET', 'POST'],
     credentials: true,
   },
