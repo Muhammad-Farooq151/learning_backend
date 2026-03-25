@@ -1,4 +1,35 @@
 const Tutor = require('../models/Tutor');
+const Course = require('../models/Course');
+
+const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const hydrateTutorCourses = async (tutorDoc) => {
+  const tutor = tutorDoc.toObject ? tutorDoc.toObject() : tutorDoc;
+  const linkedCourses = Array.isArray(tutor.courses) ? tutor.courses : [];
+  const name = String(tutor.name || '').trim();
+
+  if (!name) {
+    return { ...tutor, courses: linkedCourses };
+  }
+
+  const nameMatchedCourses = await Course.find({
+    instructor: { $regex: `^${escapeRegExp(name)}$`, $options: 'i' },
+  }).select('title');
+
+  const mergedCourseMap = new Map();
+
+  [...linkedCourses, ...nameMatchedCourses].forEach((course) => {
+    const courseId = String(course?._id || course?.id || course?.title || Math.random());
+    if (!mergedCourseMap.has(courseId)) {
+      mergedCourseMap.set(courseId, course);
+    }
+  });
+
+  return {
+    ...tutor,
+    courses: Array.from(mergedCourseMap.values()),
+  };
+};
 
 // Create a new tutor
 const createTutor = async (req, res) => {
@@ -94,9 +125,11 @@ const getAllTutors = async (req, res) => {
       .populate('courses', 'title')
       .sort({ createdAt: -1 });
 
+    const tutorsWithCourses = await Promise.all(tutors.map((tutor) => hydrateTutorCourses(tutor)));
+
     res.status(200).json({
       success: true,
-      data: tutors,
+      data: tutorsWithCourses,
     });
   } catch (error) {
     console.error('Error fetching tutors:', error);
@@ -123,7 +156,7 @@ const getTutorById = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: tutor,
+      data: await hydrateTutorCourses(tutor),
     });
   } catch (error) {
     console.error('Error fetching tutor:', error);

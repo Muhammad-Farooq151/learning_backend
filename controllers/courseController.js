@@ -1,9 +1,43 @@
 const Course = require('../models/Course');
 const User = require('../models/User');
+const Tutor = require('../models/Tutor');
 const { uploadVideoToCloudinary, uploadImageToCloudinary, uploadFileToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
 const path = require('path');
+
+const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const findTutorByName = async (name = '') => {
+  const normalizedName = String(name || '').trim();
+  if (!normalizedName) return null;
+
+  return Tutor.findOne({
+    name: { $regex: `^${escapeRegExp(normalizedName)}$`, $options: 'i' },
+  });
+};
+
+const attachCourseToTutorByName = async (tutorName, courseId) => {
+  const tutor = await findTutorByName(tutorName);
+  if (!tutor) return null;
+
+  await Tutor.findByIdAndUpdate(tutor._id, {
+    $addToSet: { courses: courseId },
+  });
+
+  return tutor;
+};
+
+const detachCourseFromTutorByName = async (tutorName, courseId) => {
+  const tutor = await findTutorByName(tutorName);
+  if (!tutor) return null;
+
+  await Tutor.findByIdAndUpdate(tutor._id, {
+    $pull: { courses: courseId },
+  });
+
+  return tutor;
+};
 
 // Create a new course
 const createCourse = async (req, res) => {
@@ -211,6 +245,7 @@ const createCourse = async (req, res) => {
     });
 
     await course.save();
+    await attachCourseToTutorByName(instructor, course._id);
 
     res.status(201).json({
       success: true,
@@ -328,6 +363,7 @@ const updateCourse = async (req, res) => {
   try {
     const { id } = req.params;
     const course = await Course.findById(id);
+    const previousInstructor = course?.instructor || '';
 
     if (!course) {
       return res.status(404).json({
@@ -604,6 +640,13 @@ const updateCourse = async (req, res) => {
 
     await course.save();
 
+    if (instructor && instructor.trim() !== previousInstructor.trim()) {
+      await detachCourseFromTutorByName(previousInstructor, course._id);
+      await attachCourseToTutorByName(instructor, course._id);
+    } else {
+      await attachCourseToTutorByName(course.instructor, course._id);
+    }
+
     res.status(200).json({
       success: true,
       message: 'Course updated successfully',
@@ -661,6 +704,7 @@ const deleteCourse = async (req, res) => {
     }
 
     // Delete course from database
+    await detachCourseFromTutorByName(course.instructor, course._id);
     await Course.findByIdAndDelete(id);
 
     res.status(200).json({
