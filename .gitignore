@@ -1,4 +1,10 @@
 node_modules
+public/uploads/*
+!public/uploads/.gitkeep
+# GCP service account JSON — never commit (keep folder with .gitkeep only)
+secrets/*
+!secrets/.gitkeep
+*.json.key
 .env
 .env.*
 .git

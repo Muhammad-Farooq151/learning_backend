@@ -1,7 +1,12 @@
 const Course = require('../models/Course');
 const User = require('../models/User');
 const Tutor = require('../models/Tutor');
-const { uploadVideoToCloudinary, uploadImageToCloudinary, uploadFileToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
+const {
+  uploadVideo,
+  uploadImage,
+  uploadResourceFile,
+  deleteStoredFile,
+} = require('../config/storage');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
 const path = require('path');
@@ -90,7 +95,7 @@ const createCourse = async (req, res) => {
       : null;
     if (thumbnailFile) {
       try {
-        const thumbnailResult = await uploadImageToCloudinary(thumbnailFile.path);
+        const thumbnailResult = await uploadImage(thumbnailFile.path);
         thumbnailUrl = thumbnailResult.url;
         thumbnailPublicId = thumbnailResult.publicId;
         // Clean up local file
@@ -104,15 +109,47 @@ const createCourse = async (req, res) => {
         }
         return res.status(500).json({
           success: false,
-          message: 'Error uploading thumbnail to Cloudinary',
+          message: 'Error uploading thumbnail',
         });
       }
     }
 
-    // Get all lesson video files
+    // Get all lesson video files (order in multipart may not match lesson index — use videoIndices)
     const lessonVideoFiles = req.files && Array.isArray(req.files)
       ? req.files.filter(f => f.fieldname === 'lessonVideos')
       : [];
+
+    let videoIndices = [];
+    try {
+      const raw = req.body.videoIndices;
+      if (raw) {
+        videoIndices = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      }
+    } catch (e) {
+      console.warn('[createCourse] videoIndices parse failed, using sequential video mapping');
+    }
+
+    const lessonVideoMap = {};
+    const useIndexMap =
+      Array.isArray(videoIndices) &&
+      videoIndices.length > 0 &&
+      videoIndices.length === lessonVideoFiles.length;
+
+    if (useIndexMap) {
+      lessonVideoFiles.forEach((videoFile, videoIndex) => {
+        const lessonIndex = videoIndices[videoIndex];
+        if (lessonIndex !== undefined && lessonIndex !== null) {
+          lessonVideoMap[lessonIndex] = videoFile;
+        }
+      });
+    } else {
+      // Fallback: sequential file order → lesson 0, 1, 2… (legacy)
+      lessonVideoFiles.forEach((videoFile, i) => {
+        if (parsedLessons && i < parsedLessons.length) {
+          lessonVideoMap[i] = videoFile;
+        }
+      });
+    }
 
     // Process lesson videos
     const processedLessons = [];
@@ -126,12 +163,11 @@ const createCourse = async (req, res) => {
           order: i,
         };
 
-        // Get video file for this lesson (by index)
-        const videoFile = lessonVideoFiles[i] || null;
+        const videoFile = lessonVideoMap[i] || null;
 
         if (videoFile) {
           try {
-            const videoResult = await uploadVideoToCloudinary(videoFile.path);
+            const videoResult = await uploadVideo(videoFile.path);
             lessonData.videoUrl = videoResult.url;
             lessonData.videoPublicId = videoResult.publicId;
             lessonData.duration = videoResult.duration || 0;
@@ -174,7 +210,7 @@ const createCourse = async (req, res) => {
 
         if (resourceFile) {
           try {
-            const fileResult = await uploadFileToCloudinary(resourceFile.path, 'courses/resources');
+            const fileResult = await uploadResourceFile(resourceFile.path, 'courses/resources');
             resourceData.fileUrl = fileResult.downloadUrl || fileResult.url; // Use downloadUrl for PDFs
             resourceData.filePublicId = fileResult.publicId;
             // Clean up local file
@@ -344,6 +380,12 @@ const getCourseById = async (req, res) => {
     const courseObj = course.toObject();
     courseObj.enrolled = enrolledCount;
 
+    if (Array.isArray(courseObj.lessons) && courseObj.lessons.length > 0) {
+      courseObj.lessons = [...courseObj.lessons].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0)
+      );
+    }
+
     res.status(200).json({
       success: true,
       data: courseObj,
@@ -401,10 +443,10 @@ const updateCourse = async (req, res) => {
       ? req.files.find(f => f.fieldname === 'thumbnail') 
       : null;
     if (thumbnailFile) {
-      // Delete old thumbnail from Cloudinary
+      // Delete old thumbnail from storage
       if (course.thumbnailPublicId) {
         try {
-          await deleteFromCloudinary(course.thumbnailPublicId);
+          await deleteStoredFile(course.thumbnailPublicId, 'image');
         } catch (error) {
           console.error('Error deleting old thumbnail:', error);
         }
@@ -412,7 +454,7 @@ const updateCourse = async (req, res) => {
 
       // Upload new thumbnail
       try {
-        const thumbnailResult = await uploadImageToCloudinary(thumbnailFile.path);
+        const thumbnailResult = await uploadImage(thumbnailFile.path);
         course.thumbnailUrl = thumbnailResult.url;
         course.thumbnailPublicId = thumbnailResult.publicId;
         // Clean up local file
@@ -424,7 +466,7 @@ const updateCourse = async (req, res) => {
         cleanupFiles([thumbnailFile]);
         return res.status(500).json({
           success: false,
-          message: 'Error uploading thumbnail to Cloudinary',
+          message: 'Error uploading thumbnail',
         });
       }
     }
@@ -462,10 +504,10 @@ const updateCourse = async (req, res) => {
         const videoFile = lessonVideoMap[i] || null;
 
         if (videoFile) {
-          // Delete old video from Cloudinary if it exists
+          // Delete old video from storage if it exists
           if (existingLesson && existingLesson.videoPublicId) {
             try {
-              await deleteFromCloudinary(existingLesson.videoPublicId);
+              await deleteStoredFile(existingLesson.videoPublicId, 'video');
             } catch (error) {
               console.error(`Error deleting old video for lesson ${i}:`, error);
             }
@@ -473,7 +515,7 @@ const updateCourse = async (req, res) => {
 
           // Upload new video
           try {
-            const videoResult = await uploadVideoToCloudinary(videoFile.path);
+            const videoResult = await uploadVideo(videoFile.path);
             lesson.videoUrl = videoResult.url;
             lesson.videoPublicId = videoResult.publicId;
             lesson.duration = videoResult.duration || 0;
@@ -578,10 +620,10 @@ const updateCourse = async (req, res) => {
         const resourceFile = resourceFiles[i] || null;
 
         if (resourceFile) {
-          // Delete old resource file from Cloudinary if exists
+          // Delete old resource file from storage if exists
           if (existingResource && existingResource.filePublicId) {
             try {
-              await deleteFromCloudinary(existingResource.filePublicId);
+              await deleteStoredFile(existingResource.filePublicId, 'resource');
             } catch (error) {
               console.error('Error deleting old resource file:', error);
             }
@@ -589,7 +631,7 @@ const updateCourse = async (req, res) => {
 
           // Upload new resource file
           try {
-            const fileResult = await uploadFileToCloudinary(resourceFile.path, 'courses/resources');
+            const fileResult = await uploadResourceFile(resourceFile.path, 'courses/resources');
             resourceData.fileUrl = fileResult.downloadUrl || fileResult.url; // Use downloadUrl for PDFs
             resourceData.filePublicId = fileResult.publicId;
             // Clean up local file
@@ -622,7 +664,7 @@ const updateCourse = async (req, res) => {
           const oldResource = course.resources[i];
           if (oldResource && oldResource.filePublicId) {
             try {
-              await deleteFromCloudinary(oldResource.filePublicId);
+              await deleteStoredFile(oldResource.filePublicId, 'resource');
             } catch (error) {
               console.error('Error deleting old resource:', error);
             }
@@ -681,23 +723,36 @@ const deleteCourse = async (req, res) => {
       });
     }
 
-    // Delete thumbnail from Cloudinary
+    // Delete thumbnail from storage
     if (course.thumbnailPublicId) {
       try {
-        await deleteFromCloudinary(course.thumbnailPublicId);
+        await deleteStoredFile(course.thumbnailPublicId, 'image');
       } catch (error) {
-        console.error('Error deleting thumbnail from Cloudinary:', error);
+        console.error('Error deleting thumbnail from storage:', error);
       }
     }
 
-    // Delete all lesson videos from Cloudinary
+    // Delete resource files from storage
+    if (course.resources && course.resources.length > 0) {
+      for (const resource of course.resources) {
+        if (resource.filePublicId) {
+          try {
+            await deleteStoredFile(resource.filePublicId, 'resource');
+          } catch (error) {
+            console.error('Error deleting resource file from storage:', error);
+          }
+        }
+      }
+    }
+
+    // Delete all lesson videos from storage
     if (course.lessons && course.lessons.length > 0) {
       for (const lesson of course.lessons) {
         if (lesson.videoPublicId) {
           try {
-            await deleteFromCloudinary(lesson.videoPublicId);
+            await deleteStoredFile(lesson.videoPublicId, 'video');
           } catch (error) {
-            console.error('Error deleting video from Cloudinary:', error);
+            console.error('Error deleting video from storage:', error);
           }
         }
       }
