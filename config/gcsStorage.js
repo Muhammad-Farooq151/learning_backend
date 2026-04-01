@@ -1,10 +1,10 @@
 /**
  * Google Cloud Storage — uploads and deletes for courses / feedback.
  *
- * Architecture (4 buckets):
- *   vixhunter-raw-uploads      — reserved (direct signed upload + transcoder; not used here yet)
- *   vixhunter-processed-videos — lesson videos (GCS_BUCKET_PROCESSED_VIDEOS)
- *   vixhunter-static-assets    — thumbnails, PDFs, feedback images (GCS_BUCKET_STATIC_ASSETS)
+ * Architecture:
+ *   GCS_BUCKET_RAW_UPLOADS       — original lesson uploads (input to Transcoder; not served to users)
+ *   GCS_BUCKET_PROCESSED_VIDEOS  — HLS output + legacy MP4 when not using pipeline
+ *   GCS_BUCKET_STATIC_ASSETS     — thumbnails, PDFs, feedback images
  *   vixhunter-backups          — reserved (backups; not used here yet)
  *
  * Optional CDN: GCS_PUBLIC_CDN_BASE_URL for public object URLs.
@@ -13,6 +13,33 @@ const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
 const { execSync } = require('child_process');
+
+let _ffprobeWarned = false;
+
+/**
+ * Fix common typos (missing hyphens between words) so env matches GCP bucket names:
+ * vixhunter-raw-uploads, vixhunter-processed-videos, vixhunter-static-assets
+ * Only exact mistaken strings are rewritten — correct names pass through unchanged.
+ */
+const BUCKET_NAME_TYPOS = {
+  'vixhunter-rawuploads': 'vixhunter-raw-uploads',
+  'vixhunter-processedvideos': 'vixhunter-processed-videos',
+  'vixhunter-staticassets': 'vixhunter-static-assets',
+};
+
+function normalizeBucketNameFromEnv(value, envKey) {
+  if (value == null || typeof value !== 'string') return value;
+  const t = value.trim();
+  if (!t) return t;
+  const fixed = BUCKET_NAME_TYPOS[t.toLowerCase()];
+  if (fixed && fixed !== t) {
+    console.warn(
+      `[GCS] ${envKey}: corrected bucket name "${t}" → "${fixed}" (must match GCP exactly)`
+    );
+    return fixed;
+  }
+  return t;
+}
 
 let storageSingleton = null;
 
@@ -44,14 +71,60 @@ function getStorage() {
 }
 
 function bucketVideos() {
-  const name = process.env.GCS_BUCKET_PROCESSED_VIDEOS || process.env.GCS_BUCKET_VIDEOS;
+  const rawName = process.env.GCS_BUCKET_PROCESSED_VIDEOS || process.env.GCS_BUCKET_VIDEOS;
+  const name = normalizeBucketNameFromEnv(rawName, 'GCS_BUCKET_PROCESSED_VIDEOS');
   if (!name) throw new Error('GCS_BUCKET_PROCESSED_VIDEOS (or GCS_BUCKET_VIDEOS) is not set');
   return getStorage().bucket(name);
 }
 
 function bucketStatic() {
-  const name = process.env.GCS_BUCKET_STATIC_ASSETS || process.env.GCS_BUCKET_STATIC;
+  const rawName = process.env.GCS_BUCKET_STATIC_ASSETS || process.env.GCS_BUCKET_STATIC;
+  const name = normalizeBucketNameFromEnv(rawName, 'GCS_BUCKET_STATIC_ASSETS');
   if (!name) throw new Error('GCS_BUCKET_STATIC_ASSETS (or GCS_BUCKET_STATIC) is not set');
+  return getStorage().bucket(name);
+}
+
+let _rawBucketInferWarned = false;
+
+/**
+ * Infer vixhunter-raw-uploads from vixhunter-processed-videos when explicit env is missing.
+ */
+function inferRawBucketFromProcessed(processedBucket) {
+  if (!processedBucket || typeof processedBucket !== 'string') return '';
+  const p = normalizeBucketNameFromEnv(processedBucket, 'GCS_BUCKET_PROCESSED_VIDEOS(infer)');
+  if (/processed-videos/i.test(p)) {
+    return p.replace(/processed-videos/i, 'raw-uploads');
+  }
+  return '';
+}
+
+/**
+ * Raw bucket name for uploads. Prefer GCS_BUCKET_RAW_UPLOADS; otherwise infer from processed bucket name.
+ */
+function resolveRawBucketName() {
+  const explicit = process.env.GCS_BUCKET_RAW_UPLOADS?.trim();
+  if (explicit) return normalizeBucketNameFromEnv(explicit, 'GCS_BUCKET_RAW_UPLOADS');
+
+  const processed =
+    process.env.GCS_BUCKET_PROCESSED_VIDEOS || process.env.GCS_BUCKET_VIDEOS;
+  const inferred = inferRawBucketFromProcessed(processed);
+  if (inferred && !_rawBucketInferWarned) {
+    _rawBucketInferWarned = true;
+    console.warn(
+      `[GCS] GCS_BUCKET_RAW_UPLOADS is not set; inferred "${inferred}" from processed bucket "${processed}". Set GCS_BUCKET_RAW_UPLOADS explicitly.`
+    );
+  }
+  return inferred || '';
+}
+
+/** Raw uploads — originals before transcoding (HLS pipeline). */
+function bucketRaw() {
+  const name = resolveRawBucketName();
+  if (!name) {
+    throw new Error(
+      'Raw uploads bucket unresolved: set GCS_BUCKET_RAW_UPLOADS or use a processed bucket name containing "processed-videos" for inference'
+    );
+  }
   return getStorage().bucket(name);
 }
 
@@ -72,6 +145,12 @@ function getVideoDurationSeconds(filePath) {
     const sec = parseFloat(String(out).trim());
     return Number.isFinite(sec) ? Math.round(sec) : 0;
   } catch {
+    if (!_ffprobeWarned && filePath && fs.existsSync(filePath)) {
+      _ffprobeWarned = true;
+      console.warn(
+        '[GCS] ffprobe failed or not installed — lesson duration will default to 0. Install ffmpeg (includes ffprobe) for accurate duration in production.'
+      );
+    }
     return 0;
   }
 }
@@ -93,6 +172,58 @@ const uploadVideoToGCS = async (filePath, folder = 'courses/videos') => {
   const url = publicObjectUrl(bucketName, objectName);
   const duration = getVideoDurationSeconds(filePath);
   return { url, publicId: objectName, duration };
+};
+
+/**
+ * Upload original file to RAW bucket at a fixed path (e.g. courses/{courseId}/{lessonId}/original.mp4).
+ * @returns {{ bucketName: string, objectName: string, publicId: string }}
+ */
+const uploadRawVideoToGcs = async (filePath, objectName) => {
+  const bucket = bucketRaw();
+  const ext = path.extname(filePath).toLowerCase();
+  const ct =
+    ext === '.mov' ? 'video/quicktime' : ext === '.webm' ? 'video/webm' : 'video/mp4';
+  const normalized = objectName.replace(/^\/+|\/+$/g, '');
+  await uploadFileToBucket(bucket, filePath, normalized, ct);
+  console.log(`[GCS] RAW upload OK bucket=${bucket.name} object=${normalized}`);
+  return { bucketName: bucket.name, objectName: normalized, publicId: normalized };
+};
+
+/** Delete one object in the raw bucket. */
+const deleteRawObject = async (publicId) => {
+  if (!publicId) return null;
+  try {
+    await bucketRaw().file(publicId).delete({ ignoreNotFound: true });
+  } catch (e) {
+    console.error('[GCS] delete raw error:', e.message);
+    throw e;
+  }
+  return { ok: true };
+};
+
+/** Delete all objects under prefix in processed-videos bucket (HLS output folder). */
+const deleteProcessedVideoPrefix = async (prefix) => {
+  if (!prefix) return null;
+  const normalized = String(prefix).replace(/^\/+/, '').replace(/([^/])$/, '$1/');
+  try {
+    await bucketVideos().deleteFiles({ prefix: normalized });
+  } catch (e) {
+    console.error('[GCS] delete processed prefix error:', e.message);
+    throw e;
+  }
+  return { ok: true };
+};
+
+/** Delete a single processed video file (legacy MP4 path). */
+const deleteProcessedVideoFile = async (publicId) => {
+  if (!publicId) return null;
+  try {
+    await bucketVideos().file(publicId).delete({ ignoreNotFound: true });
+  } catch (e) {
+    console.error('[GCS] delete video file error:', e.message);
+    throw e;
+  }
+  return { ok: true };
 };
 
 const uploadImageToGCS = async (filePath, folder = 'courses/images') => {
@@ -165,13 +296,25 @@ async function verifyGcsAtStartup() {
   }
 
   try {
-    await Promise.all([
+    const checks = [
       bucketVideos().getMetadata(),
       bucketStatic().getMetadata(),
-    ]);
+    ];
+    const rawName = resolveRawBucketName();
+    if (rawName) {
+      checks.push(bucketRaw().getMetadata());
+    }
+    await Promise.all(checks);
     console.log(
       `✅ GCS: connected — buckets OK → videos: ${videoName} | static: ${staticName}`
     );
+    if (rawName) {
+      console.log(`   raw uploads (HLS pipeline): ${rawName}`);
+    } else {
+      console.warn(
+        '⚠️ GCS: raw bucket not configured — HLS pipeline is OFF; new lesson videos upload as MP4 to the processed bucket. Set GCS_BUCKET_RAW_UPLOADS=vixhunter-raw-uploads (or matching name).'
+      );
+    }
     if (process.env.GCS_PROJECT_ID) {
       console.log(`   GCS project: ${process.env.GCS_PROJECT_ID}`);
     }
@@ -182,8 +325,19 @@ async function verifyGcsAtStartup() {
 
 module.exports = {
   uploadVideoToGCS,
+  uploadRawVideoToGcs,
   uploadImageToGCS,
   uploadResourceToGCS,
   deleteFromGCS,
+  deleteRawObject,
+  deleteProcessedVideoPrefix,
+  deleteProcessedVideoFile,
+  publicObjectUrl,
+  getVideoDurationSeconds,
+  bucketVideos,
+  bucketRaw,
+  resolveRawBucketName,
+  inferRawBucketFromProcessed,
+  normalizeBucketNameFromEnv,
   verifyGcsAtStartup,
 };

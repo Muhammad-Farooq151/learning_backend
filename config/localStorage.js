@@ -8,6 +8,8 @@ const fsp = require('fs').promises;
 const { randomUUID } = require('crypto');
 const { execSync } = require('child_process');
 
+let _ffprobeWarnedLocal = false;
+
 const UPLOAD_ROOT = path.join(__dirname, '..', 'public', 'uploads');
 
 function getBaseUrl() {
@@ -31,6 +33,12 @@ function getVideoDurationSeconds(filePath) {
     const sec = parseFloat(String(out).trim());
     return Number.isFinite(sec) ? Math.round(sec) : 0;
   } catch {
+    if (!_ffprobeWarnedLocal && filePath && fs.existsSync(filePath)) {
+      _ffprobeWarnedLocal = true;
+      console.warn(
+        '[Local] ffprobe unavailable — duration defaults to 0. Install ffmpeg for accurate duration.'
+      );
+    }
     return 0;
   }
 }

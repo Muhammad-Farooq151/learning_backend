@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const User = require('../models/User');
 const Tutor = require('../models/Tutor');
@@ -6,7 +7,14 @@ const {
   uploadImage,
   uploadResourceFile,
   deleteStoredFile,
+  deleteLessonVideoAssets,
 } = require('../config/storage');
+const {
+  isHlsPipelineEnabled,
+  logHlsPipelineDecision,
+  prepareHlsLessonUpload,
+  scheduleHlsTranscoding,
+} = require('../config/videoPipeline');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
 const path = require('path');
@@ -151,12 +159,21 @@ const createCourse = async (req, res) => {
       });
     }
 
+    const courseId = new mongoose.Types.ObjectId();
+    const pendingHlsJobs = [];
+
+    if (lessonVideoFiles.length > 0) {
+      logHlsPipelineDecision('createCourse');
+    }
+
     // Process lesson videos
     const processedLessons = [];
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
+        const lessonId = new mongoose.Types.ObjectId();
         const lessonData = {
+          _id: lessonId,
           lessonName: lesson.lessonName || '',
           skills: lesson.skills || [],
           learningOutcomes: lesson.learningOutcomes || '',
@@ -167,11 +184,25 @@ const createCourse = async (req, res) => {
 
         if (videoFile) {
           try {
-            const videoResult = await uploadVideo(videoFile.path);
-            lessonData.videoUrl = videoResult.url;
-            lessonData.videoPublicId = videoResult.publicId;
-            lessonData.duration = videoResult.duration || 0;
-            // Clean up local file
+            if (isHlsPipelineEnabled()) {
+              console.log(`[createCourse] HLS pipeline — course ${courseId} lesson ${lessonId}`);
+              const { lessonFields, scheduleMeta } = await prepareHlsLessonUpload(
+                videoFile.path,
+                courseId,
+                lessonId
+              );
+              Object.assign(lessonData, lessonFields);
+              pendingHlsJobs.push(scheduleMeta);
+            } else {
+              console.warn(
+                '[createCourse] HLS pipeline not active — storing MP4 in processed bucket (see [HLS] log above)'
+              );
+              const videoResult = await uploadVideo(videoFile.path);
+              lessonData.videoUrl = videoResult.url;
+              lessonData.videoPublicId = videoResult.publicId;
+              lessonData.videoType = 'mp4';
+              lessonData.duration = videoResult.duration || 0;
+            }
             if (fs.existsSync(videoFile.path)) {
               fs.unlinkSync(videoFile.path);
             }
@@ -181,6 +212,7 @@ const createCourse = async (req, res) => {
             return res.status(500).json({
               success: false,
               message: `Error uploading video for lesson ${i + 1}`,
+              error: error.message,
             });
           }
         }
@@ -260,8 +292,9 @@ const createCourse = async (req, res) => {
       });
     }
 
-    // Create course
+    // Create course (courseId pre-generated so lesson videos can use RAW → Transcoder paths)
     const course = new Course({
+      _id: courseId,
       title,
       category,
       instructor,
@@ -282,6 +315,14 @@ const createCourse = async (req, res) => {
 
     await course.save();
     await attachCourseToTutorByName(instructor, course._id);
+
+    pendingHlsJobs.forEach((meta) => {
+      try {
+        scheduleHlsTranscoding(meta);
+      } catch (e) {
+        console.error('[createCourse] schedule HLS transcoding:', e.message);
+      }
+    });
 
     res.status(201).json({
       success: true,
@@ -494,32 +535,63 @@ const updateCourse = async (req, res) => {
       }
     });
 
+    const pendingHlsUpdate = [];
+
+    if (lessonVideoFiles.length > 0) {
+      logHlsPipelineDecision('updateCourse');
+    }
+
     // Update lesson videos
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
         const existingLesson = course.lessons[i];
 
-        // Get video file for this lesson (using the map)
         const videoFile = lessonVideoMap[i] || null;
 
+        let lessonId;
+        if (lesson._id != null && mongoose.Types.ObjectId.isValid(lesson._id)) {
+          lessonId = new mongoose.Types.ObjectId(lesson._id);
+        } else if (existingLesson && existingLesson._id) {
+          lessonId = existingLesson._id;
+        } else {
+          lessonId = new mongoose.Types.ObjectId();
+        }
+        lesson._id = lessonId;
+
         if (videoFile) {
-          // Delete old video from storage if it exists
           if (existingLesson && existingLesson.videoPublicId) {
             try {
-              await deleteStoredFile(existingLesson.videoPublicId, 'video');
+              const prev = existingLesson.toObject ? existingLesson.toObject() : existingLesson;
+              await deleteLessonVideoAssets(prev);
             } catch (error) {
               console.error(`Error deleting old video for lesson ${i}:`, error);
             }
           }
 
-          // Upload new video
           try {
-            const videoResult = await uploadVideo(videoFile.path);
-            lesson.videoUrl = videoResult.url;
-            lesson.videoPublicId = videoResult.publicId;
-            lesson.duration = videoResult.duration || 0;
-            // Clean up local file
+            if (isHlsPipelineEnabled()) {
+              console.log(`[updateCourse] HLS pipeline — course ${course._id} lesson ${lessonId}`);
+              const { lessonFields, scheduleMeta } = await prepareHlsLessonUpload(
+                videoFile.path,
+                course._id,
+                lessonId
+              );
+              Object.assign(lesson, lessonFields);
+              pendingHlsUpdate.push(scheduleMeta);
+            } else {
+              console.warn(
+                '[updateCourse] HLS pipeline not active — storing MP4 in processed bucket (see [HLS] log above)'
+              );
+              const videoResult = await uploadVideo(videoFile.path);
+              lesson.videoUrl = videoResult.url;
+              lesson.videoPublicId = videoResult.publicId;
+              lesson.videoType = 'mp4';
+              lesson.duration = videoResult.duration || 0;
+              lesson.transcodingStatus = undefined;
+              lesson.transcodingJobName = null;
+              lesson.rawVideoPublicId = null;
+            }
             if (fs.existsSync(videoFile.path)) {
               fs.unlinkSync(videoFile.path);
             }
@@ -529,30 +601,21 @@ const updateCourse = async (req, res) => {
             return res.status(500).json({
               success: false,
               message: `Error uploading video for lesson ${i + 1}`,
+              error: error.message,
             });
           }
         } else if (existingLesson) {
-          // Keep existing video if no new one is provided
           lesson.videoUrl = existingLesson.videoUrl;
           lesson.videoPublicId = existingLesson.videoPublicId;
           lesson.duration = existingLesson.duration;
+          lesson.videoType = existingLesson.videoType || 'mp4';
+          lesson.transcodingStatus = existingLesson.transcodingStatus;
+          lesson.transcodingJobName = existingLesson.transcodingJobName;
+          lesson.rawVideoPublicId = existingLesson.rawVideoPublicId;
         }
-        // Note: If it's a new lesson (no existingLesson) and no videoFile was uploaded,
-        // the lesson.videoUrl will remain undefined/null, which is correct for new lessons without videos
 
         lesson.order = i;
       }
-    } else if (parsedLessons && Array.isArray(parsedLessons)) {
-      // Update lessons without new videos
-      parsedLessons.forEach((lesson, i) => {
-        const existingLesson = course.lessons[i];
-        if (existingLesson) {
-          lesson.videoUrl = existingLesson.videoUrl;
-          lesson.videoPublicId = existingLesson.videoPublicId;
-          lesson.duration = existingLesson.duration;
-        }
-        lesson.order = i;
-      });
     }
 
     // Parse and validate discountPercentage
@@ -682,6 +745,14 @@ const updateCourse = async (req, res) => {
 
     await course.save();
 
+    pendingHlsUpdate.forEach((meta) => {
+      try {
+        scheduleHlsTranscoding(meta);
+      } catch (e) {
+        console.error('[updateCourse] schedule HLS transcoding:', e.message);
+      }
+    });
+
     if (instructor && instructor.trim() !== previousInstructor.trim()) {
       await detachCourseFromTutorByName(previousInstructor, course._id);
       await attachCourseToTutorByName(instructor, course._id);
@@ -745,12 +816,12 @@ const deleteCourse = async (req, res) => {
       }
     }
 
-    // Delete all lesson videos from storage
+    // Delete all lesson videos from storage (MP4 or HLS prefix + raw)
     if (course.lessons && course.lessons.length > 0) {
       for (const lesson of course.lessons) {
         if (lesson.videoPublicId) {
           try {
-            await deleteStoredFile(lesson.videoPublicId, 'video');
+            await deleteLessonVideoAssets(lesson.toObject ? lesson.toObject() : lesson);
           } catch (error) {
             console.error('Error deleting video from storage:', error);
           }

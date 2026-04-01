@@ -59,10 +59,38 @@ async function deleteStoredFile(publicId, kind = 'image') {
   return local.deleteFromLocal(publicId);
 }
 
+/**
+ * Remove lesson video assets (legacy MP4 file or full HLS prefix + optional raw).
+ * @param {object} lesson — Mongoose subdoc or plain { videoPublicId, videoType, rawVideoPublicId }
+ */
+async function deleteLessonVideoAssets(lesson) {
+  if (!lesson || !lesson.videoPublicId) return null;
+  if (provider !== 'gcs') {
+    return local.deleteFromLocal(lesson.videoPublicId);
+  }
+  assertGcsConfigured();
+  const vType = lesson.videoType || 'mp4';
+  if (vType === 'hls') {
+    let prefix = String(lesson.videoPublicId).replace(/playlist\.m3u8$/i, '');
+    if (!prefix.endsWith('/')) prefix += '/';
+    await gcs.deleteProcessedVideoPrefix(prefix);
+    if (lesson.rawVideoPublicId) {
+      try {
+        await gcs.deleteRawObject(lesson.rawVideoPublicId);
+      } catch (e) {
+        console.error('[Storage] delete raw lesson video:', e.message);
+      }
+    }
+    return { ok: true };
+  }
+  return gcs.deleteFromGCS(lesson.videoPublicId, 'video');
+}
+
 module.exports = {
   uploadVideo,
   uploadImage,
   uploadResourceFile,
   deleteStoredFile,
+  deleteLessonVideoAssets,
   STORAGE_PROVIDER: provider,
 };
