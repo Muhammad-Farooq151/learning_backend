@@ -427,6 +427,13 @@ const getCourseById = async (req, res) => {
       );
     }
 
+    // HLS transcodingStatus must be fresh — avoid 304 / cached JSON showing stale "processing"
+    res.set({
+      'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    });
+
     res.status(200).json({
       success: true,
       data: courseObj,

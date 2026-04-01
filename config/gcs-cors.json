@@ -1,0 +1,25 @@
+[
+  {
+    "origin": [
+      "http://localhost:3000",
+      "http://localhost:5000",
+      "http://127.0.0.1:3000",
+      "https://vixhunter.com",
+      "https://www.vixhunter.com",
+      "https://stage.vixhunter.com"
+    ],
+    "method": ["GET", "HEAD", "OPTIONS"],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range",
+      "Accept-Ranges",
+      "Range",
+      "Last-Modified",
+      "ETag",
+      "x-goog-generation",
+      "x-goog-hash"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
