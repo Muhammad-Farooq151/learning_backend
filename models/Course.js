@@ -19,6 +19,26 @@ const lessonSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  /** mp4 = legacy direct file; hls = adaptive (playlist.m3u8) */
+  videoType: {
+    type: String,
+    enum: ['mp4', 'hls'],
+    default: 'mp4',
+  },
+  /** pending → processing (job accepted) → ready | failed — only for videoType hls */
+  transcodingStatus: {
+    type: String,
+    enum: ['pending', 'processing', 'ready', 'failed'],
+  },
+  transcodingJobName: {
+    type: String,
+    default: null,
+  },
+  /** Raw upload object path in GCS_BUCKET_RAW_UPLOADS (optional cleanup after transcode) */
+  rawVideoPublicId: {
+    type: String,
+    default: null,
+  },
   videoPublicId: {
     type: String,
     default: null,

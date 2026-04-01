@@ -1,7 +1,20 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const User = require('../models/User');
 const Tutor = require('../models/Tutor');
-const { uploadVideoToCloudinary, uploadImageToCloudinary, uploadFileToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
+const {
+  uploadVideo,
+  uploadImage,
+  uploadResourceFile,
+  deleteStoredFile,
+  deleteLessonVideoAssets,
+} = require('../config/storage');
+const {
+  isHlsPipelineEnabled,
+  logHlsPipelineDecision,
+  prepareHlsLessonUpload,
+  scheduleHlsTranscoding,
+} = require('../config/videoPipeline');
 const { cleanupFiles } = require('../middleware/upload');
 const fs = require('fs');
 const path = require('path');
@@ -90,7 +103,7 @@ const createCourse = async (req, res) => {
       : null;
     if (thumbnailFile) {
       try {
-        const thumbnailResult = await uploadImageToCloudinary(thumbnailFile.path);
+        const thumbnailResult = await uploadImage(thumbnailFile.path);
         thumbnailUrl = thumbnailResult.url;
         thumbnailPublicId = thumbnailResult.publicId;
         // Clean up local file
@@ -104,38 +117,92 @@ const createCourse = async (req, res) => {
         }
         return res.status(500).json({
           success: false,
-          message: 'Error uploading thumbnail to Cloudinary',
+          message: 'Error uploading thumbnail',
         });
       }
     }
 
-    // Get all lesson video files
+    // Get all lesson video files (order in multipart may not match lesson index — use videoIndices)
     const lessonVideoFiles = req.files && Array.isArray(req.files)
       ? req.files.filter(f => f.fieldname === 'lessonVideos')
       : [];
+
+    let videoIndices = [];
+    try {
+      const raw = req.body.videoIndices;
+      if (raw) {
+        videoIndices = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      }
+    } catch (e) {
+      console.warn('[createCourse] videoIndices parse failed, using sequential video mapping');
+    }
+
+    const lessonVideoMap = {};
+    const useIndexMap =
+      Array.isArray(videoIndices) &&
+      videoIndices.length > 0 &&
+      videoIndices.length === lessonVideoFiles.length;
+
+    if (useIndexMap) {
+      lessonVideoFiles.forEach((videoFile, videoIndex) => {
+        const lessonIndex = videoIndices[videoIndex];
+        if (lessonIndex !== undefined && lessonIndex !== null) {
+          lessonVideoMap[lessonIndex] = videoFile;
+        }
+      });
+    } else {
+      // Fallback: sequential file order → lesson 0, 1, 2… (legacy)
+      lessonVideoFiles.forEach((videoFile, i) => {
+        if (parsedLessons && i < parsedLessons.length) {
+          lessonVideoMap[i] = videoFile;
+        }
+      });
+    }
+
+    const courseId = new mongoose.Types.ObjectId();
+    const pendingHlsJobs = [];
+
+    if (lessonVideoFiles.length > 0) {
+      logHlsPipelineDecision('createCourse');
+    }
 
     // Process lesson videos
     const processedLessons = [];
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
+        const lessonId = new mongoose.Types.ObjectId();
         const lessonData = {
+          _id: lessonId,
           lessonName: lesson.lessonName || '',
           skills: lesson.skills || [],
           learningOutcomes: lesson.learningOutcomes || '',
           order: i,
         };
 
-        // Get video file for this lesson (by index)
-        const videoFile = lessonVideoFiles[i] || null;
+        const videoFile = lessonVideoMap[i] || null;
 
         if (videoFile) {
           try {
-            const videoResult = await uploadVideoToCloudinary(videoFile.path);
-            lessonData.videoUrl = videoResult.url;
-            lessonData.videoPublicId = videoResult.publicId;
-            lessonData.duration = videoResult.duration || 0;
-            // Clean up local file
+            if (isHlsPipelineEnabled()) {
+              console.log(`[createCourse] HLS pipeline — course ${courseId} lesson ${lessonId}`);
+              const { lessonFields, scheduleMeta } = await prepareHlsLessonUpload(
+                videoFile.path,
+                courseId,
+                lessonId
+              );
+              Object.assign(lessonData, lessonFields);
+              pendingHlsJobs.push(scheduleMeta);
+            } else {
+              console.warn(
+                '[createCourse] HLS pipeline not active — storing MP4 in processed bucket (see [HLS] log above)'
+              );
+              const videoResult = await uploadVideo(videoFile.path);
+              lessonData.videoUrl = videoResult.url;
+              lessonData.videoPublicId = videoResult.publicId;
+              lessonData.videoType = 'mp4';
+              lessonData.duration = videoResult.duration || 0;
+            }
             if (fs.existsSync(videoFile.path)) {
               fs.unlinkSync(videoFile.path);
             }
@@ -145,6 +212,7 @@ const createCourse = async (req, res) => {
             return res.status(500).json({
               success: false,
               message: `Error uploading video for lesson ${i + 1}`,
+              error: error.message,
             });
           }
         }
@@ -174,7 +242,7 @@ const createCourse = async (req, res) => {
 
         if (resourceFile) {
           try {
-            const fileResult = await uploadFileToCloudinary(resourceFile.path, 'courses/resources');
+            const fileResult = await uploadResourceFile(resourceFile.path, 'courses/resources');
             resourceData.fileUrl = fileResult.downloadUrl || fileResult.url; // Use downloadUrl for PDFs
             resourceData.filePublicId = fileResult.publicId;
             // Clean up local file
@@ -224,8 +292,9 @@ const createCourse = async (req, res) => {
       });
     }
 
-    // Create course
+    // Create course (courseId pre-generated so lesson videos can use RAW → Transcoder paths)
     const course = new Course({
+      _id: courseId,
       title,
       category,
       instructor,
@@ -246,6 +315,14 @@ const createCourse = async (req, res) => {
 
     await course.save();
     await attachCourseToTutorByName(instructor, course._id);
+
+    pendingHlsJobs.forEach((meta) => {
+      try {
+        scheduleHlsTranscoding(meta);
+      } catch (e) {
+        console.error('[createCourse] schedule HLS transcoding:', e.message);
+      }
+    });
 
     res.status(201).json({
       success: true,
@@ -344,6 +421,19 @@ const getCourseById = async (req, res) => {
     const courseObj = course.toObject();
     courseObj.enrolled = enrolledCount;
 
+    if (Array.isArray(courseObj.lessons) && courseObj.lessons.length > 0) {
+      courseObj.lessons = [...courseObj.lessons].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0)
+      );
+    }
+
+    // HLS transcodingStatus must be fresh — avoid 304 / cached JSON showing stale "processing"
+    res.set({
+      'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    });
+
     res.status(200).json({
       success: true,
       data: courseObj,
@@ -401,10 +491,10 @@ const updateCourse = async (req, res) => {
       ? req.files.find(f => f.fieldname === 'thumbnail') 
       : null;
     if (thumbnailFile) {
-      // Delete old thumbnail from Cloudinary
+      // Delete old thumbnail from storage
       if (course.thumbnailPublicId) {
         try {
-          await deleteFromCloudinary(course.thumbnailPublicId);
+          await deleteStoredFile(course.thumbnailPublicId, 'image');
         } catch (error) {
           console.error('Error deleting old thumbnail:', error);
         }
@@ -412,7 +502,7 @@ const updateCourse = async (req, res) => {
 
       // Upload new thumbnail
       try {
-        const thumbnailResult = await uploadImageToCloudinary(thumbnailFile.path);
+        const thumbnailResult = await uploadImage(thumbnailFile.path);
         course.thumbnailUrl = thumbnailResult.url;
         course.thumbnailPublicId = thumbnailResult.publicId;
         // Clean up local file
@@ -424,7 +514,7 @@ const updateCourse = async (req, res) => {
         cleanupFiles([thumbnailFile]);
         return res.status(500).json({
           success: false,
-          message: 'Error uploading thumbnail to Cloudinary',
+          message: 'Error uploading thumbnail',
         });
       }
     }
@@ -452,32 +542,63 @@ const updateCourse = async (req, res) => {
       }
     });
 
+    const pendingHlsUpdate = [];
+
+    if (lessonVideoFiles.length > 0) {
+      logHlsPipelineDecision('updateCourse');
+    }
+
     // Update lesson videos
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
         const existingLesson = course.lessons[i];
 
-        // Get video file for this lesson (using the map)
         const videoFile = lessonVideoMap[i] || null;
 
+        let lessonId;
+        if (lesson._id != null && mongoose.Types.ObjectId.isValid(lesson._id)) {
+          lessonId = new mongoose.Types.ObjectId(lesson._id);
+        } else if (existingLesson && existingLesson._id) {
+          lessonId = existingLesson._id;
+        } else {
+          lessonId = new mongoose.Types.ObjectId();
+        }
+        lesson._id = lessonId;
+
         if (videoFile) {
-          // Delete old video from Cloudinary if it exists
           if (existingLesson && existingLesson.videoPublicId) {
             try {
-              await deleteFromCloudinary(existingLesson.videoPublicId);
+              const prev = existingLesson.toObject ? existingLesson.toObject() : existingLesson;
+              await deleteLessonVideoAssets(prev);
             } catch (error) {
               console.error(`Error deleting old video for lesson ${i}:`, error);
             }
           }
 
-          // Upload new video
           try {
-            const videoResult = await uploadVideoToCloudinary(videoFile.path);
-            lesson.videoUrl = videoResult.url;
-            lesson.videoPublicId = videoResult.publicId;
-            lesson.duration = videoResult.duration || 0;
-            // Clean up local file
+            if (isHlsPipelineEnabled()) {
+              console.log(`[updateCourse] HLS pipeline — course ${course._id} lesson ${lessonId}`);
+              const { lessonFields, scheduleMeta } = await prepareHlsLessonUpload(
+                videoFile.path,
+                course._id,
+                lessonId
+              );
+              Object.assign(lesson, lessonFields);
+              pendingHlsUpdate.push(scheduleMeta);
+            } else {
+              console.warn(
+                '[updateCourse] HLS pipeline not active — storing MP4 in processed bucket (see [HLS] log above)'
+              );
+              const videoResult = await uploadVideo(videoFile.path);
+              lesson.videoUrl = videoResult.url;
+              lesson.videoPublicId = videoResult.publicId;
+              lesson.videoType = 'mp4';
+              lesson.duration = videoResult.duration || 0;
+              lesson.transcodingStatus = undefined;
+              lesson.transcodingJobName = null;
+              lesson.rawVideoPublicId = null;
+            }
             if (fs.existsSync(videoFile.path)) {
               fs.unlinkSync(videoFile.path);
             }
@@ -487,30 +608,21 @@ const updateCourse = async (req, res) => {
             return res.status(500).json({
               success: false,
               message: `Error uploading video for lesson ${i + 1}`,
+              error: error.message,
             });
           }
         } else if (existingLesson) {
-          // Keep existing video if no new one is provided
           lesson.videoUrl = existingLesson.videoUrl;
           lesson.videoPublicId = existingLesson.videoPublicId;
           lesson.duration = existingLesson.duration;
+          lesson.videoType = existingLesson.videoType || 'mp4';
+          lesson.transcodingStatus = existingLesson.transcodingStatus;
+          lesson.transcodingJobName = existingLesson.transcodingJobName;
+          lesson.rawVideoPublicId = existingLesson.rawVideoPublicId;
         }
-        // Note: If it's a new lesson (no existingLesson) and no videoFile was uploaded,
-        // the lesson.videoUrl will remain undefined/null, which is correct for new lessons without videos
 
         lesson.order = i;
       }
-    } else if (parsedLessons && Array.isArray(parsedLessons)) {
-      // Update lessons without new videos
-      parsedLessons.forEach((lesson, i) => {
-        const existingLesson = course.lessons[i];
-        if (existingLesson) {
-          lesson.videoUrl = existingLesson.videoUrl;
-          lesson.videoPublicId = existingLesson.videoPublicId;
-          lesson.duration = existingLesson.duration;
-        }
-        lesson.order = i;
-      });
     }
 
     // Parse and validate discountPercentage
@@ -578,10 +690,10 @@ const updateCourse = async (req, res) => {
         const resourceFile = resourceFiles[i] || null;
 
         if (resourceFile) {
-          // Delete old resource file from Cloudinary if exists
+          // Delete old resource file from storage if exists
           if (existingResource && existingResource.filePublicId) {
             try {
-              await deleteFromCloudinary(existingResource.filePublicId);
+              await deleteStoredFile(existingResource.filePublicId, 'resource');
             } catch (error) {
               console.error('Error deleting old resource file:', error);
             }
@@ -589,7 +701,7 @@ const updateCourse = async (req, res) => {
 
           // Upload new resource file
           try {
-            const fileResult = await uploadFileToCloudinary(resourceFile.path, 'courses/resources');
+            const fileResult = await uploadResourceFile(resourceFile.path, 'courses/resources');
             resourceData.fileUrl = fileResult.downloadUrl || fileResult.url; // Use downloadUrl for PDFs
             resourceData.filePublicId = fileResult.publicId;
             // Clean up local file
@@ -622,7 +734,7 @@ const updateCourse = async (req, res) => {
           const oldResource = course.resources[i];
           if (oldResource && oldResource.filePublicId) {
             try {
-              await deleteFromCloudinary(oldResource.filePublicId);
+              await deleteStoredFile(oldResource.filePublicId, 'resource');
             } catch (error) {
               console.error('Error deleting old resource:', error);
             }
@@ -639,6 +751,14 @@ const updateCourse = async (req, res) => {
     if (status) course.status = status;
 
     await course.save();
+
+    pendingHlsUpdate.forEach((meta) => {
+      try {
+        scheduleHlsTranscoding(meta);
+      } catch (e) {
+        console.error('[updateCourse] schedule HLS transcoding:', e.message);
+      }
+    });
 
     if (instructor && instructor.trim() !== previousInstructor.trim()) {
       await detachCourseFromTutorByName(previousInstructor, course._id);
@@ -681,23 +801,36 @@ const deleteCourse = async (req, res) => {
       });
     }
 
-    // Delete thumbnail from Cloudinary
+    // Delete thumbnail from storage
     if (course.thumbnailPublicId) {
       try {
-        await deleteFromCloudinary(course.thumbnailPublicId);
+        await deleteStoredFile(course.thumbnailPublicId, 'image');
       } catch (error) {
-        console.error('Error deleting thumbnail from Cloudinary:', error);
+        console.error('Error deleting thumbnail from storage:', error);
       }
     }
 
-    // Delete all lesson videos from Cloudinary
+    // Delete resource files from storage
+    if (course.resources && course.resources.length > 0) {
+      for (const resource of course.resources) {
+        if (resource.filePublicId) {
+          try {
+            await deleteStoredFile(resource.filePublicId, 'resource');
+          } catch (error) {
+            console.error('Error deleting resource file from storage:', error);
+          }
+        }
+      }
+    }
+
+    // Delete all lesson videos from storage (MP4 or HLS prefix + raw)
     if (course.lessons && course.lessons.length > 0) {
       for (const lesson of course.lessons) {
         if (lesson.videoPublicId) {
           try {
-            await deleteFromCloudinary(lesson.videoPublicId);
+            await deleteLessonVideoAssets(lesson.toObject ? lesson.toObject() : lesson);
           } catch (error) {
-            console.error('Error deleting video from Cloudinary:', error);
+            console.error('Error deleting video from storage:', error);
           }
         }
       }

@@ -205,7 +205,7 @@
           
 //           // Only save if range is valid (end > start)
 //           if (rangeEnd > rangeStart) {
-//             console.log(`[Socket.io] 💾 Saving progress with range (Cloudinary + Socket.io) for ${socket.user.userId}, lesson ${lessonId}:`, {
+//             console.log(`[Socket.io] 💾 Saving progress with range (Socket.io) for ${socket.user.userId}, lesson ${lessonId}:`, {
 //               rangeStart: rangeStart.toFixed(2),
 //               rangeEnd: rangeEnd.toFixed(2),
 //               rangeDuration: (rangeEnd - rangeStart).toFixed(2),
@@ -275,7 +275,7 @@
           
 //           const totalWatchDuration = session.watchDuration;
           
-//           console.log(`[Socket.io] 💾 Saving progress on pause with range (Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
+//           console.log(`[Socket.io] 💾 Saving progress on pause with range for ${socket.user.userId}, lesson ${lessonId}:`, {
 //             rangeStart: rangeStart.toFixed(2),
 //             rangeEnd: rangeEnd.toFixed(2),
 //             currentTime: currentTime,
@@ -327,7 +327,7 @@
 //           progressTrackingService.endSession(sessionKey);
 //         } else if (currentTime > 0) {
 //           // No active session but video was paused with progress - save current position
-//           // Handle watchedSegments from client if available (Cloudinary + Socket.io)
+//           // Handle watchedSegments from client if available (Socket.io)
 //           let finalRangeStart = 0;
 //           let finalRangeEnd = currentTime;
           
@@ -337,7 +337,7 @@
 //             finalRangeEnd = watchedRangesFromSegments[watchedRangesFromSegments.length - 1].end;
 //           }
           
-//           console.log(`[Socket.io] 💾 Saving progress (no session, Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
+//           console.log(`[Socket.io] 💾 Saving progress (no session) for ${socket.user.userId}, lesson ${lessonId}:`, {
 //             currentTime: currentTime,
 //             videoDuration: videoDuration,
 //             watchedSegmentsCount: watchedSegments?.length || 0,
@@ -391,7 +391,7 @@
 //     }
 //   });
 
-//   // Handle video ended (Cloudinary + Socket.io)
+//   // Handle video ended (Socket.io)
 //   socket.on('video:ended', async (data) => {
 //     try {
 //       const { courseId, lessonId, videoDuration, watchedSegments } = data;
@@ -399,7 +399,7 @@
       
 //       const totalWatchDuration = progressTrackingService.endSession(sessionKey);
       
-//       // Use watchedSegments if available (SCORM-style from Cloudinary)
+//       // Use watchedSegments if available (SCORM-style)
 //       let finalRangeStart = 0;
 //       let finalRangeEnd = videoDuration;
       
@@ -493,28 +493,43 @@
 
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const http = require('http');
-const { Server } = require('socket.io');
+
+/** Off by default — saves client/server cost; set ENABLE_SOCKET_IO=true to restore realtime video progress */
+const ENABLE_SOCKET_IO = process.env.ENABLE_SOCKET_IO === 'true';
 
 const app = express();
 const server = http.createServer(app);
 
-// Socket.io setup with CORS
-const io = new Server(server, {
-  cors: {
-    // origin: process.env.FRONTEND_URL || 'http://localhost:3000' ,
-    origin: ['https://stage.vixhunter.com', 'https://vixhunter.com'],
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
-});
+const socketCorsOrigins = (process.env.CORS_ORIGINS ||
+  'http://localhost:3000,http://localhost:5173,https://stage.vixhunter.com,https://vixhunter.com'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+let io = null;
+if (ENABLE_SOCKET_IO) {
+  const { Server } = require('socket.io');
+  io = new Server(server, {
+    cors: {
+      origin: socketCorsOrigins,
+      methods: ['GET', 'POST'],
+      credentials: true,
+    },
+  });
+}
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Local storage: serve uploaded files when STORAGE_PROVIDER=local
+app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
 
 // ============================================================
 // ✅ FIX: Routes loaded BEFORE server.listen so port opens fast
@@ -564,6 +579,7 @@ app.get('/health', (req, res) => {
   });
 });
 
+if (ENABLE_SOCKET_IO && io) {
 // ============================================================
 // Import models for use in Socket.io handlers
 // ============================================================
@@ -660,7 +676,7 @@ io.on('connection', (socket) => {
 
           // Only save if range is valid (end > start)
           if (rangeEnd > rangeStart) {
-            console.log(`[Socket.io] 💾 Saving progress with range (Cloudinary + Socket.io) for ${socket.user.userId}, lesson ${lessonId}:`, {
+            console.log(`[Socket.io] 💾 Saving progress with range (Socket.io) for ${socket.user.userId}, lesson ${lessonId}:`, {
               rangeStart: rangeStart.toFixed(2),
               rangeEnd: rangeEnd.toFixed(2),
               rangeDuration: (rangeEnd - rangeStart).toFixed(2),
@@ -730,7 +746,7 @@ io.on('connection', (socket) => {
 
           const totalWatchDuration = session.watchDuration;
 
-          console.log(`[Socket.io] 💾 Saving progress on pause with range (Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
+          console.log(`[Socket.io] 💾 Saving progress on pause with range for ${socket.user.userId}, lesson ${lessonId}:`, {
             rangeStart: rangeStart.toFixed(2),
             rangeEnd: rangeEnd.toFixed(2),
             currentTime: currentTime,
@@ -782,7 +798,7 @@ io.on('connection', (socket) => {
           progressTrackingService.endSession(sessionKey);
         } else if (currentTime > 0) {
           // No active session but video was paused with progress - save current position
-          // Handle watchedSegments from client if available (Cloudinary + Socket.io)
+          // Handle watchedSegments from client if available (Socket.io)
           let finalRangeStart = 0;
           let finalRangeEnd = currentTime;
 
@@ -792,7 +808,7 @@ io.on('connection', (socket) => {
             finalRangeEnd = watchedRangesFromSegments[watchedRangesFromSegments.length - 1].end;
           }
 
-          console.log(`[Socket.io] 💾 Saving progress (no session, Cloudinary) for ${socket.user.userId}, lesson ${lessonId}:`, {
+          console.log(`[Socket.io] 💾 Saving progress (no session) for ${socket.user.userId}, lesson ${lessonId}:`, {
             currentTime: currentTime,
             videoDuration: videoDuration,
             watchedSegmentsCount: watchedSegments?.length || 0,
@@ -846,7 +862,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle video ended (Cloudinary + Socket.io)
+  // Handle video ended (Socket.io)
   socket.on('video:ended', async (data) => {
     try {
       const { courseId, lessonId, videoDuration, watchedSegments } = data;
@@ -854,7 +870,7 @@ io.on('connection', (socket) => {
 
       const totalWatchDuration = progressTrackingService.endSession(sessionKey);
 
-      // Use watchedSegments if available (SCORM-style from Cloudinary)
+      // Use watchedSegments if available (SCORM-style)
       let finalRangeStart = 0;
       let finalRangeEnd = videoDuration;
 
@@ -914,6 +930,7 @@ io.on('connection', (socket) => {
     }
   });
 });
+}
 
 // ============================================================
 // ✅ CRITICAL FIX 1: Server starts FIRST before MongoDB
@@ -926,7 +943,11 @@ const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
   console.log('🚀 Server is running on port', PORT);
   console.log(`📍 http://localhost:${PORT}`);
-  console.log('🔌 Socket.io server is ready');
+  if (ENABLE_SOCKET_IO) {
+    console.log('🔌 Socket.io server is ready');
+  } else {
+    console.log('🔌 Socket.io disabled (set ENABLE_SOCKET_IO=true to enable realtime progress)');
+  }
 
   // ✅ CRITICAL FIX 3: Connect MongoDB INSIDE listen callback
   // Port is open BEFORE MongoDB starts connecting.
@@ -947,6 +968,11 @@ server.listen(PORT, '0.0.0.0', () => {
       require('./models/CourseProgress');
       require('./models/Feedback');
       console.log('✅ Models loaded');
+
+      const { verifyGcsAtStartup } = require('./config/gcsStorage');
+      verifyGcsAtStartup().catch((e) =>
+        console.error('❌ GCS: startup check error:', e.message)
+      );
     })
     .catch((error) => {
       // ✅ FIX: Log only — do NOT call process.exit()

@@ -1,7 +1,7 @@
 # Courses API Documentation
 
 ## Overview
-This API handles course creation, updates, deletion, and retrieval with Cloudinary integration for video and image uploads.
+This API handles course creation, updates, deletion, and retrieval with **configurable file storage**: local filesystem (default for localhost) or **Google Cloud Storage** (`STORAGE_PROVIDER=gcs`). See `server/.env.example` and `docs/LEARNING_HUB_ARCHITECTURE_GCP.md`.
 
 ## Environment Variables Required
 Add these to your `.env` file:
@@ -81,7 +81,7 @@ CLOUDINARY_API_SECRET=your_api_secret
 **Request:**
 - Same as Create Course, but all fields are optional
 - Only provide files (thumbnail/videos) if you want to update them
-- Old files will be automatically deleted from Cloudinary when new ones are uploaded
+- Old files will be automatically deleted from storage when new ones are uploaded (same provider)
 
 **Response:**
 ```json
@@ -148,7 +148,7 @@ CLOUDINARY_API_SECRET=your_api_secret
 - **Form field name:** `lessonVideos` (multiple files)
 - **Accepted formats:** MP4, MOV, AVI
 - **Max size:** 800MB per file
-- **Storage:** Uploaded to Cloudinary with automatic optimization
+- **Storage:** Uploaded via `server/config/storage.js` (local `public/uploads` or GCS buckets)
 
 ## Error Handling
 
@@ -170,8 +170,8 @@ Common HTTP status codes:
 
 ## Notes
 
-1. **File Cleanup:** Local files are automatically deleted after successful Cloudinary upload
-2. **Cloudinary Deletion:** When updating or deleting courses, old files are automatically removed from Cloudinary
+1. **File Cleanup:** Temp upload files are removed after successful storage upload
+2. **Storage deletion:** When updating or deleting courses, old files are removed from the configured backend
 3. **JSON Arrays:** Arrays (skills, faqs, lessons, keywords) should be sent as JSON strings in form-data
 4. **Video Processing:** Videos are processed with chunked uploads for large files
-5. **Image Optimization:** Images are automatically optimized and resized by Cloudinary
+5. **Production:** For CDN + image optimization, use GCS + optional image processing or front-end sizing

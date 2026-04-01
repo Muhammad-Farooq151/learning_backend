@@ -1,7 +1,7 @@
 const Feedback = require('../models/Feedback');
 const User = require('../models/User');
 const Course = require('../models/Course');
-const { uploadImageToCloudinary } = require('../config/cloudinary');
+const { uploadImage } = require('../config/storage');
 const fs = require('fs');
 
 // POST /api/feedback
@@ -88,7 +88,7 @@ const submitFeedback = async (req, res) => {
     if (req.file) {
       try {
         const filePath = req.file.path;
-        const uploadResult = await uploadImageToCloudinary(filePath, 'feedback/images');
+        const uploadResult = await uploadImage(filePath, 'feedback/images');
         
         fileUrl = uploadResult.url;
         filePublicId = uploadResult.publicId;
@@ -98,7 +98,7 @@ const submitFeedback = async (req, res) => {
           fs.unlinkSync(filePath);
         }
       } catch (uploadError) {
-        console.error('Error uploading file to Cloudinary:', uploadError);
+        console.error('Error uploading feedback image:', uploadError);
         // Delete local file if upload fails
         if (req.file.path && fs.existsSync(req.file.path)) {
           fs.unlinkSync(req.file.path);
