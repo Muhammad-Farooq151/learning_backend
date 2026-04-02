@@ -176,6 +176,16 @@ const login = async (req, res) => {
       });
     }
 
+    // Learner portal only — admins must use POST /api/auth/admin-login
+    if (user.role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message:
+          'Admin accounts cannot sign in here. Use the admin login page.',
+        code: 'ADMIN_USE_ADMIN_LOGIN',
+      });
+    }
+
     // Generate JWT token
     const jwtSecret = process.env.JWT_SECRET || 'default_dev_jwt_secret_change_me';
     const token = jwt.sign(
@@ -770,21 +780,23 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // Check if user is admin
-    if (user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Admin privileges required.',
-      });
-    }
-
-    // Verify password
+    // Verify password first (same message as wrong email — do not leak role before auth)
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
+      });
+    }
+
+    // Learners must use POST /api/auth/login — only admins here
+    if (user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message:
+          'Learner accounts cannot sign in here. Use the main site login.',
+        code: 'USER_USE_LEARNER_LOGIN',
       });
     }
 
