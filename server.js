@@ -496,6 +496,7 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
 const http = require('http');
 
@@ -571,14 +572,22 @@ app.use('/api/feedback', feedbackRoutes);
 const mediaRoutes = require('./routes/mediaRoutes');
 app.use('/api', mediaRoutes);
 
-// Secure GCS media proxy (JWT + enrollment) — same logic as documented for Next /api/*; lives on this server
+// Secure GCS media proxy — JWT + purchase; streams via @google-cloud/storage (private buckets)
 const { getHlsAllowPrefixes, getFileAllowPrefixes } = require('./utils/mediaProxyPrefixes');
 const { handleMediaProxyGet } = require('./utils/mediaProxyExpress');
 
-app.get('/api/hls-proxy', (req, res) => {
+const mediaStreamLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many media requests' },
+});
+
+app.get('/api/hls-proxy', mediaStreamLimiter, (req, res) => {
   handleMediaProxyGet(req, res, getHlsAllowPrefixes(), '/api/hls-proxy');
 });
-app.get('/api/file-proxy', (req, res) => {
+app.get('/api/file-proxy', mediaStreamLimiter, (req, res) => {
   handleMediaProxyGet(req, res, getFileAllowPrefixes(), '/api/file-proxy');
 });
 

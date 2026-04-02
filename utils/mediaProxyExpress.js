@@ -1,5 +1,11 @@
-const { Readable } = require('stream');
 const { getBearerToken, assertMediaAccess } = require('./secureMediaAccess');
+const { parseGcsHttpsUrl } = require('../services/gcsUrlParser');
+const {
+  downloadObjectAsString,
+  getObjectMeta,
+  parseRangeHeader,
+  createObjectReadStream,
+} = require('../services/gcsStreamService');
 
 function isAllowedUrl(url, allowPrefixes) {
   return allowPrefixes.some((p) => url.startsWith(p));
@@ -67,18 +73,100 @@ function rewritePlaylistBody(text, playlistUrlString, origin, proxyPathname, jwt
     .join('\n');
 }
 
-const FORWARD_HEADERS = [
-  'content-type',
-  'content-length',
-  'content-range',
-  'accept-ranges',
-  'last-modified',
-  'etag',
-];
+/** Raw playlist text cache (rewrite still per-request with JWT in URLs). */
+const playlistCache = new Map();
+const PLAYLIST_TTL_MS = 30_000;
+const PLAYLIST_MAX = 200;
+
+function getCachedPlaylist(cacheKey) {
+  const e = playlistCache.get(cacheKey);
+  if (!e) return null;
+  if (Date.now() > e.exp) {
+    playlistCache.delete(cacheKey);
+    return null;
+  }
+  return e.text;
+}
+
+function setCachedPlaylist(cacheKey, text) {
+  if (playlistCache.size >= PLAYLIST_MAX) {
+    const k = playlistCache.keys().next().value;
+    playlistCache.delete(k);
+  }
+  playlistCache.set(cacheKey, { text, exp: Date.now() + PLAYLIST_TTL_MS });
+}
+
+function isPlaylistTarget(target, objectName) {
+  return (
+    target.includes('.m3u8') ||
+    objectName.toLowerCase().endsWith('.m3u8')
+  );
+}
+
+function guessContentType(objectName, metaContentType) {
+  const ext = objectName.split('.').pop()?.toLowerCase();
+  if (ext === 'ts') return 'video/mp2t';
+  if (ext === 'm3u8') return 'application/vnd.apple.mpegurl';
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  return metaContentType || 'application/octet-stream';
+}
 
 /**
- * Express handler: GET with query u=encoded GCS URL
- * @param {string} proxyPathname - '/api/hls-proxy' or '/api/file-proxy' (rewritten playlist segment URLs)
+ * Stream from private GCS via SDK (no public HTTP to storage.googleapis.com).
+ */
+async function streamBinaryFromGcs(req, res, bucketName, objectName, targetUrl) {
+  let meta;
+  try {
+    meta = await getObjectMeta(bucketName, objectName);
+  } catch (e) {
+    const code = e.code || e?.errors?.[0]?.reason;
+    if (code === 404 || String(e.message).includes('No such object')) {
+      return res.status(404).json({ message: 'Object not found' });
+    }
+    console.error('[media-proxy] getObjectMeta', e);
+    return res.status(502).json({ message: 'Storage error' });
+  }
+
+  const size = meta.size || 0;
+  const ct = guessContentType(objectName, meta.contentType);
+
+  const rangeHeader = req.headers.range;
+  const parsed = parseRangeHeader(rangeHeader, size);
+
+  if (parsed) {
+    const chunk = parsed.end - parsed.start + 1;
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${parsed.start}-${parsed.end}/${size}`);
+    res.setHeader('Content-Length', chunk);
+  } else {
+    res.status(200);
+    if (size > 0) res.setHeader('Content-Length', size);
+  }
+
+  res.setHeader('Content-Type', ct);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+
+  const stream = createObjectReadStream(
+    bucketName,
+    objectName,
+    parsed ? { start: parsed.start, end: parsed.end } : null
+  );
+
+  stream.on('error', (err) => {
+    console.error('[media-proxy] GCS read stream', err.message || err);
+    if (!res.headersSent) res.status(500);
+    res.end();
+  });
+
+  stream.pipe(res);
+}
+
+/**
+ * Express handler: GET ?u=<encoded GCS HTTPS URL> — auth + GCS SDK streaming only.
  */
 async function handleMediaProxyGet(req, res, allowPrefixes, proxyPathname = '/api/hls-proxy') {
   const secureDisabled = process.env.SECURE_MEDIA_DISABLED === 'true';
@@ -103,6 +191,13 @@ async function handleMediaProxyGet(req, res, allowPrefixes, proxyPathname = '/ap
     return res.status(403).json({ message: 'Forbidden URL' });
   }
 
+  const parsed = parseGcsHttpsUrl(target);
+  if (!parsed) {
+    return res.status(400).json({ message: 'Not a storage.googleapis.com URL' });
+  }
+
+  const { bucketName, objectName } = parsed;
+
   const token = getBearerToken(req);
 
   if (!secureDisabled) {
@@ -117,67 +212,37 @@ async function handleMediaProxyGet(req, res, allowPrefixes, proxyPathname = '/ap
     }
   }
 
-  const range = req.headers.range;
-  const upstreamHeaders = {};
-  if (range) upstreamHeaders.Range = range;
-
-  let upstream;
-  try {
-    upstream = await fetch(target, { headers: upstreamHeaders, cache: 'no-store' });
-  } catch {
-    return res.status(502).json({ message: 'Upstream fetch failed' });
-  }
-
-  const ct = upstream.headers.get('content-type') || '';
-  const looksLikePlaylist =
-    target.includes('.m3u8') ||
-    ct.includes('application/vnd.apple.mpegurl') ||
-    ct.includes('application/x-mpegURL');
-
   const origin = getRequestOrigin(req);
 
-  if (looksLikePlaylist && upstream.ok) {
-    const text = await upstream.text();
-    const rewritten = rewritePlaylistBody(
-      text,
-      target,
-      origin,
-      proxyPathname,
-      token,
-      allowPrefixes
-    );
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).send(rewritten);
-  }
-
-  FORWARD_HEADERS.forEach((name) => {
-    const v = upstream.headers.get(name);
-    if (v) res.setHeader(name, v);
-  });
-
-  res.status(upstream.status);
-
-  if (!upstream.body) {
-    return res.end();
-  }
-
-  try {
-    if (typeof Readable.fromWeb === 'function') {
-      const nodeStream = Readable.fromWeb(upstream.body);
-      nodeStream.on('error', (err) => {
-        console.error('[media-proxy] stream error', err);
-        if (!res.headersSent) res.status(500);
-        res.end();
-      });
-      return nodeStream.pipe(res);
+  if (isPlaylistTarget(target, objectName)) {
+    try {
+      const cacheKey = `${bucketName}::${objectName}`;
+      let text = getCachedPlaylist(cacheKey);
+      if (!text) {
+        text = await downloadObjectAsString(bucketName, objectName);
+        setCachedPlaylist(cacheKey, text);
+      }
+      const rewritten = rewritePlaylistBody(
+        text,
+        target,
+        origin,
+        proxyPathname,
+        token,
+        allowPrefixes
+      );
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.status(200).send(rewritten);
+    } catch (e) {
+      console.error('[media-proxy] playlist', e.message || e);
+      if (e.code === 404 || String(e.message).includes('No such object')) {
+        return res.status(404).json({ message: 'Playlist not found' });
+      }
+      return res.status(502).json({ message: 'Failed to read playlist' });
     }
-  } catch (e) {
-    console.error('[media-proxy] fromWeb failed', e);
   }
 
-  const buf = Buffer.from(await upstream.arrayBuffer());
-  return res.send(buf);
+  return streamBinaryFromGcs(req, res, bucketName, objectName, target);
 }
 
 module.exports = {
