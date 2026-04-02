@@ -1,6 +1,6 @@
 const CourseProgress = require('../models/CourseProgress');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { verifyJwtToken } = require('../utils/jwtVerify');
 const { mergeRanges, calculateWatchedSeconds, addWatchedRange, getResumeTime } = require('../utils/rangeUtils');
 
 /**
@@ -27,9 +27,11 @@ class ProgressTrackingService {
         throw new Error('No token provided');
       }
 
-      const jwtSecret = process.env.JWT_SECRET || 'default_dev_jwt_secret_change_me';
-      const decoded = jwt.verify(token, jwtSecret);
-      
+      const decoded = verifyJwtToken(token);
+      if (!decoded?.userId) {
+        throw new Error('Invalid token');
+      }
+
       const user = await User.findById(decoded.userId).select('_id email role status');
       if (!user || user.status !== 'active') {
         throw new Error('Invalid or inactive user');

@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
 const Course = require('../models/Course');
+const { redactCourseMediaForClient } = require('../utils/redactCourseMediaUrls');
 
 const DEFAULT_EMAIL_PREFERENCES = {
   courseUpdates: true,
@@ -363,7 +364,7 @@ const getMyCourses = async (req, res) => {
 
     const user = await User.findById(userId).populate({
       path: 'enrolledCourses',
-      select: 'title description thumbnailUrl skills price discountPercentage',
+      select: 'title description thumbnailUrl thumbnailPublicId skills price discountPercentage',
     });
 
     if (!user) {
@@ -373,15 +374,21 @@ const getMyCourses = async (req, res) => {
       });
     }
 
-    const courses = (user.enrolledCourses || []).map((course) => ({
-      id: course._id.toString(),
-      title: course.title || '',
-      description: course.description || '',
-      thumbnailUrl: course.thumbnailUrl || '',
-      skills: course.skills || [],
-      price: course.price,
-      discountPercentage: course.discountPercentage || 0,
-    }));
+    const courses = (user.enrolledCourses || []).map((course) => {
+      const c = typeof course.toObject === 'function' ? course.toObject() : { ...course };
+      redactCourseMediaForClient(c);
+      return {
+        id: c._id.toString(),
+        title: c.title || '',
+        description: c.description || '',
+        thumbnailUrl: c.thumbnailUrl || '',
+        thumbnailMediaPath: c.thumbnailMediaPath,
+        hasThumbnail: c.hasThumbnail,
+        skills: c.skills || [],
+        price: c.price,
+        discountPercentage: c.discountPercentage || 0,
+      };
+    });
 
     return res.status(200).json({
       success: true,

@@ -68,7 +68,11 @@ function logHlsPipelineDecision(contextLabel) {
  */
 async function prepareHlsLessonUpload(filePath, courseId, lessonId) {
   const ext = path.extname(filePath) || '.mp4';
-  const objectRel = `courses/${courseId}/${lessonId}/original${ext}`;
+  const merged = gcs.getMergedVideoBucketName();
+  /** Doc §1.2 — merged bucket uses raw/… and processed/… prefixes */
+  const objectRel = merged
+    ? `raw/courses/${courseId}/${lessonId}/original${ext}`
+    : `courses/${courseId}/${lessonId}/original${ext}`;
 
   console.log(`[HLS] Uploading raw video → ${objectRel}`);
 
@@ -76,16 +80,20 @@ async function prepareHlsLessonUpload(filePath, courseId, lessonId) {
   const inputUri = gsUri(bucketName, publicId);
 
   const rawProcessed =
-    process.env.GCS_BUCKET_PROCESSED_VIDEOS || process.env.GCS_BUCKET_VIDEOS;
+    merged ||
+    process.env.GCS_BUCKET_PROCESSED_VIDEOS ||
+    process.env.GCS_BUCKET_VIDEOS;
   if (!rawProcessed) {
-    throw new Error('GCS_BUCKET_PROCESSED_VIDEOS is not set');
+    throw new Error('Set GCS_MERGED_VIDEO_BUCKET or GCS_BUCKET_PROCESSED_VIDEOS');
   }
   const processedName = gcs.normalizeBucketNameFromEnv(
     rawProcessed,
-    'GCS_BUCKET_PROCESSED_VIDEOS'
+    merged ? 'GCS_MERGED_VIDEO_BUCKET' : 'GCS_BUCKET_PROCESSED_VIDEOS'
   );
 
-  const outputPrefix = `courses/${courseId}/${lessonId}/`;
+  const outputPrefix = merged
+    ? `processed/courses/${courseId}/${lessonId}/`
+    : `courses/${courseId}/${lessonId}/`;
   const outputUri = `gs://${processedName}/${outputPrefix}`;
   const playlistKey = `${outputPrefix}playlist.m3u8`;
   const videoUrl = gcs.publicObjectUrl(processedName, playlistKey);

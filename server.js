@@ -495,6 +495,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const mongoose = require('mongoose');
 const http = require('http');
 
@@ -523,8 +524,20 @@ if (ENABLE_SOCKET_IO) {
   });
 }
 
-// Middleware
-app.use(cors());
+// Middleware — Doc §4.4 CORS + credentials for httpOnly cookies
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (socketCorsOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -553,6 +566,21 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/admins', adminRoutes);
 app.use('/api/feedback', feedbackRoutes);
+
+// Doc §5–6 — signed playlist + chunk redirect (optional; client uses NEXT_PUBLIC_MEDIA_DELIVERY=signed)
+const mediaRoutes = require('./routes/mediaRoutes');
+app.use('/api', mediaRoutes);
+
+// Secure GCS media proxy (JWT + enrollment) — same logic as documented for Next /api/*; lives on this server
+const { getHlsAllowPrefixes, getFileAllowPrefixes } = require('./utils/mediaProxyPrefixes');
+const { handleMediaProxyGet } = require('./utils/mediaProxyExpress');
+
+app.get('/api/hls-proxy', (req, res) => {
+  handleMediaProxyGet(req, res, getHlsAllowPrefixes(), '/api/hls-proxy');
+});
+app.get('/api/file-proxy', (req, res) => {
+  handleMediaProxyGet(req, res, getFileAllowPrefixes(), '/api/file-proxy');
+});
 
 // Root route
 app.get('/', (req, res) => {

@@ -43,6 +43,11 @@ function normalizeBucketNameFromEnv(value, envKey) {
 
 let storageSingleton = null;
 
+function getMergedVideoBucketName() {
+  const m = process.env.GCS_MERGED_VIDEO_BUCKET?.trim();
+  return m ? normalizeBucketNameFromEnv(m, 'GCS_MERGED_VIDEO_BUCKET') : '';
+}
+
 function getStorage() {
   if (storageSingleton) return storageSingleton;
   const { Storage } = require('@google-cloud/storage');
@@ -71,6 +76,8 @@ function getStorage() {
 }
 
 function bucketVideos() {
+  const merged = getMergedVideoBucketName();
+  if (merged) return getStorage().bucket(merged);
   const rawName = process.env.GCS_BUCKET_PROCESSED_VIDEOS || process.env.GCS_BUCKET_VIDEOS;
   const name = normalizeBucketNameFromEnv(rawName, 'GCS_BUCKET_PROCESSED_VIDEOS');
   if (!name) throw new Error('GCS_BUCKET_PROCESSED_VIDEOS (or GCS_BUCKET_VIDEOS) is not set');
@@ -102,6 +109,9 @@ function inferRawBucketFromProcessed(processedBucket) {
  * Raw bucket name for uploads. Prefer GCS_BUCKET_RAW_UPLOADS; otherwise infer from processed bucket name.
  */
 function resolveRawBucketName() {
+  const merged = getMergedVideoBucketName();
+  if (merged) return merged;
+
   const explicit = process.env.GCS_BUCKET_RAW_UPLOADS?.trim();
   if (explicit) return normalizeBucketNameFromEnv(explicit, 'GCS_BUCKET_RAW_UPLOADS');
 
@@ -324,6 +334,8 @@ async function verifyGcsAtStartup() {
 }
 
 module.exports = {
+  getStorage,
+  getMergedVideoBucketName,
   uploadVideoToGCS,
   uploadRawVideoToGcs,
   uploadImageToGCS,

@@ -173,6 +173,7 @@ courseSchema.index({ title: 'text', description: 'text', category: 'text' });
 courseSchema.index({ category: 1 });
 courseSchema.index({ status: 1 });
 courseSchema.index({ createdAt: -1 });
+courseSchema.index({ thumbnailPublicId: 1 }, { sparse: true });
 
 const Course = mongoose.model('Course', courseSchema);
 
