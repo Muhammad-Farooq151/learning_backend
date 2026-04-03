@@ -8,6 +8,23 @@
  * @param {Array} ranges - Array of {start, end} objects
  * @returns {Array} - Merged ranges
  */
+/**
+ * Clamp and sanitize client ranges to [0, duration]; drop invalid; merge overlaps.
+ * Server must not trust raw segment payloads.
+ */
+function clampRangesToDuration(ranges, durationSec) {
+  if (!Array.isArray(ranges) || !Number.isFinite(durationSec) || durationSec <= 0) {
+    return [];
+  }
+  const clamped = [];
+  for (const r of ranges) {
+    const s = Math.max(0, Math.min(Number(r.start) || 0, durationSec));
+    const e = Math.max(0, Math.min(Number(r.end) || 0, durationSec));
+    if (e > s) clamped.push({ start: s, end: e });
+  }
+  return mergeRanges(clamped);
+}
+
 function mergeRanges(ranges) {
   if (!ranges || ranges.length === 0) return [];
   
@@ -146,6 +163,7 @@ function getResumeTime(ranges) {
 
 module.exports = {
   mergeRanges,
+  clampRangesToDuration,
   calculateWatchedSeconds,
   addWatchedRange,
   segmentsToRanges,

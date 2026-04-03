@@ -2,7 +2,19 @@ const User = require('../models/User');
 const VerificationToken = require('../models/VerificationToken');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { COOKIE_NAME } = require('../utils/authRequest');
 const { generateVerificationToken, sendVerificationLink, createTransporter } = require('../libs/emailUtils');
+
+/** Doc §3.4 — httpOnly JWT; token in JSON only if AUTH_EXPOSE_TOKEN_IN_RESPONSE is not false */
+function setAuthCookie(res, token) {
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+}
 
 /**
  * Signup - Register a new user
@@ -196,14 +208,17 @@ const login = async (req, res) => {
         role: user.role,
       },
       jwtSecret,
-      { expiresIn: '7d' }
+      { expiresIn: '7d', algorithm: 'HS256' }
     );
+
+    setAuthCookie(res, token);
+    const exposeToken = process.env.AUTH_EXPOSE_TOKEN_IN_RESPONSE !== 'false';
 
     res.status(200).json({
       success: true,
       message: 'Login successful',
       data: {
-        token,
+        ...(exposeToken ? { token } : {}),
         user: {
           id: user._id,
           fullName: user.fullName,
@@ -818,14 +833,17 @@ const adminLogin = async (req, res) => {
         role: user.role,
       },
       jwtSecret,
-      { expiresIn: '7d' }
+      { expiresIn: '7d', algorithm: 'HS256' }
     );
+
+    setAuthCookie(res, token);
+    const exposeToken = process.env.AUTH_EXPOSE_TOKEN_IN_RESPONSE !== 'false';
 
     res.status(200).json({
       success: true,
       message: 'Admin login successful',
       data: {
-        token,
+        ...(exposeToken ? { token } : {}),
         user: {
           id: user._id,
           fullName: user.fullName,
@@ -846,10 +864,21 @@ const adminLogin = async (req, res) => {
   }
 };
 
+const logout = (req, res) => {
+  res.clearCookie(COOKIE_NAME, {
+    path: '/',
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+  });
+  res.status(200).json({ success: true, message: 'Logged out' });
+};
+
 module.exports = {
   signup,
   login,
   adminLogin,
+  logout,
   verifyOTP,
   verifyEmail,
   resendOTP,

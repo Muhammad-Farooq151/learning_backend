@@ -1,5 +1,6 @@
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { getJwtStringFromRequest } = require('../utils/authRequest');
+const { verifyJwtToken } = require('../utils/jwtVerify');
 
 /**
  * Middleware to protect user routes
@@ -7,21 +8,22 @@ const User = require('../models/User');
  */
 const auth = async (req, res, next) => {
   try {
-    // Get token from header
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const token = getJwtStringFromRequest(req);
+
+    if (!token) {
       return res.status(401).json({
         success: false,
         message: 'Access denied. No token provided.',
       });
     }
 
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-
-    // Verify token
-    const jwtSecret = process.env.JWT_SECRET || 'default_dev_jwt_secret_change_me';
-    const decoded = jwt.verify(token, jwtSecret);
+    const decoded = verifyJwtToken(token);
+    if (!decoded) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. Invalid or expired token.',
+      });
+    }
 
     // Find user
     const user = await User.findById(decoded.userId).select('_id email fullName role status');

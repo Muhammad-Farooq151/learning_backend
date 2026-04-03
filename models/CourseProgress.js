@@ -13,7 +13,19 @@ const lessonProgressSchema = new mongoose.Schema({
   },
   watched: {
     type: Number,
-    default: 0, // Last watched position (for resume)
+    default: 0, // Resume position (alias: currentTime)
+  },
+  /** Lesson video length in seconds (denominator for %) */
+  duration: {
+    type: Number,
+    default: 0,
+  },
+  /** 0–100 from unique watched coverage / duration */
+  watchedPercent: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
   },
   watchedSeconds: {
     type: Number,
@@ -60,6 +72,21 @@ const courseProgressSchema = new mongoose.Schema({
     min: 0,
     max: 100,
   },
+  /** Same as overallProgress — completed lessons / total lessons in course × 100 */
+  coursePercent: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
+  },
+  courseCompleted: {
+    type: Boolean,
+    default: false,
+  },
+  completedAt: {
+    type: Date,
+    default: null,
+  },
   lastAccessedAt: {
     type: Date,
     default: Date.now,
@@ -71,20 +98,27 @@ const courseProgressSchema = new mongoose.Schema({
 // Index for efficient queries
 courseProgressSchema.index({ userId: 1, courseId: 1 }, { unique: true });
 
-// Method to calculate overall progress
-courseProgressSchema.methods.calculateOverallProgress = function() {
-  if (!this.lessons || this.lessons.length === 0) {
-    this.overallProgress = 0;
-    return;
+/**
+ * @param {number} totalLessonsInCourse — from Course.lessons.length
+ */
+courseProgressSchema.methods.recalculateCourseProgress = function (totalLessonsInCourse) {
+  const total = Math.max(1, Number(totalLessonsInCourse) || 1);
+  const completedLessons = (this.lessons || []).filter((l) => l.completed).length;
+  const pct = Math.min(100, Math.round((completedLessons / total) * 100));
+  this.overallProgress = pct;
+  this.coursePercent = pct;
+  const allDone = completedLessons >= total;
+  this.courseCompleted = allDone;
+  if (allDone && !this.completedAt) {
+    this.completedAt = new Date();
   }
-  
-  const completedLessons = this.lessons.filter(l => l.completed).length;
-  this.overallProgress = Math.round((completedLessons / this.lessons.length) * 100);
+  if (!allDone) {
+    this.completedAt = null;
+  }
 };
 
-// Pre-save hook to calculate progress
-courseProgressSchema.pre('save', function() {
-  this.calculateOverallProgress();
+// Pre-save: touch lastAccessedAt only (course % set in controller with course lesson count)
+courseProgressSchema.pre('save', function () {
   this.lastAccessedAt = new Date();
 });
 

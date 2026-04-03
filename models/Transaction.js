@@ -77,6 +77,8 @@ const transactionSchema = new mongoose.Schema({
   timestamps: true,
 });
 
+transactionSchema.index({ userId: 1, courseId: 1, status: 1 });
+
 // Helper function to generate transaction ID
 transactionSchema.statics.generateTransactionId = function() {
   const timestamp = Date.now().toString(36).toUpperCase();

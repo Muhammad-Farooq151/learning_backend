@@ -16,8 +16,17 @@ const {
   scheduleHlsTranscoding,
 } = require('../config/videoPipeline');
 const { cleanupFiles } = require('../middleware/upload');
+const {
+  redactCourseMediaForClient,
+  stripLessonAndResourceMediaUrls,
+} = require('../utils/redactCourseMediaUrls');
 const fs = require('fs');
 const path = require('path');
+
+function shouldRedactCourseApi(req) {
+  if (process.env.REDACT_GCS_URLS_IN_COURSE_API === 'false') return false;
+  return !(req.authUser && req.authUser.role === 'admin');
+}
 
 const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -374,6 +383,10 @@ const getAllCourses = async (req, res) => {
         });
         const courseObj = course.toObject();
         courseObj.enrolled = enrolledCount;
+        if (shouldRedactCourseApi(req)) {
+          redactCourseMediaForClient(courseObj);
+          stripLessonAndResourceMediaUrls(courseObj);
+        }
         return courseObj;
       })
     );
@@ -425,6 +438,10 @@ const getCourseById = async (req, res) => {
       courseObj.lessons = [...courseObj.lessons].sort(
         (a, b) => (a.order ?? 0) - (b.order ?? 0)
       );
+    }
+
+    if (shouldRedactCourseApi(req)) {
+      redactCourseMediaForClient(courseObj);
     }
 
     // HLS transcodingStatus must be fresh — avoid 304 / cached JSON showing stale "processing"
