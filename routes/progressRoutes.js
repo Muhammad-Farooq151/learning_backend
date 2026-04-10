@@ -1,7 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
-const { auth } = require('../middleware/authMiddleware');
+const { auth } = require('../middleware/auth');
 const {
   updateProgress,
   saveProgress,

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { submitFeedback, getUserFeedbacks, getCourseFeedbacks } = require('../controllers/feedbackController');
 const { uploadFeedbackFile } = require('../middleware/upload');
-const { auth } = require('../middleware/authMiddleware');
+const { auth } = require('../middleware/auth');
 
 // POST /api/feedback - Submit feedback (requires authentication)
 router.post('/', auth, uploadFeedbackFile, submitFeedback);

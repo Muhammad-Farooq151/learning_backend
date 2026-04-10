@@ -1,19 +1,15 @@
+/**
+ * Section 6 — aggregates lesson stream + media chunk routes under `/api`.
+ * - `routes/lessons.js` → `/api/lessons/:lessonId/stream`
+ * - `routes/media.js` → `/api/media/chunk`
+ */
 const express = require('express');
-const rateLimit = require('express-rate-limit');
-const { getLessonStream, getMediaChunk } = require('../controllers/mediaController');
+const lessonsRouter = require('./lessons');
+const mediaRouter = require('./media');
 
 const router = express.Router();
 
-/** Doc §4.5 — generous limit for HLS chunk traffic */
-const mediaLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => req.ip,
-});
-
-router.get('/lessons/:lessonId/stream', mediaLimiter, getLessonStream);
-router.get('/media/chunk', mediaLimiter, getMediaChunk);
+router.use('/lessons', lessonsRouter);
+router.use('/media', mediaRouter);
 
 module.exports = router;

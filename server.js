@@ -575,6 +575,8 @@ app.use('/api', mediaRoutes);
 // Secure GCS media proxy — JWT + purchase; streams via @google-cloud/storage (private buckets)
 const { getHlsAllowPrefixes, getFileAllowPrefixes } = require('./utils/mediaProxyPrefixes');
 const { handleMediaProxyGet } = require('./utils/mediaProxyExpress');
+const { auth } = require('./middleware/auth');
+const { getSignedReadUrl } = require('./controllers/mediaSignedReadController');
 
 const mediaStreamLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -590,6 +592,9 @@ app.get('/api/hls-proxy', mediaStreamLimiter, (req, res) => {
 app.get('/api/file-proxy', mediaStreamLimiter, (req, res) => {
   handleMediaProxyGet(req, res, getFileAllowPrefixes(), '/api/file-proxy');
 });
+
+/** Optional: GCS v4 signed URL for direct playback (MP4); HLS still uses proxy — see mediaSignedReadController */
+app.get('/api/media/signed-read-url', mediaStreamLimiter, auth, getSignedReadUrl);
 
 // Root route
 app.get('/', (req, res) => {
@@ -1004,6 +1009,7 @@ server.listen(PORT, '0.0.0.0', () => {
       require('./models/Transaction');
       require('./models/CourseProgress');
       require('./models/Feedback');
+      require('./models/VideoAccessLog');
       console.log('✅ Models loaded');
 
       const { verifyGcsAtStartup } = require('./config/gcsStorage');

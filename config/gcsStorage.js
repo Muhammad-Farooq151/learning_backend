@@ -43,6 +43,13 @@ function normalizeBucketNameFromEnv(value, envKey) {
 
 let storageSingleton = null;
 
+/** Resolve GOOGLE_APPLICATION_CREDENTIALS relative to process.cwd() so npm run dev from repo root still finds server/secrets/... */
+function resolveGcpKeyFilename() {
+  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!keyFile) return null;
+  return path.isAbsolute(keyFile) ? keyFile : path.resolve(process.cwd(), keyFile);
+}
+
 function getMergedVideoBucketName() {
   const m = process.env.GCS_MERGED_VIDEO_BUCKET?.trim();
   return m ? normalizeBucketNameFromEnv(m, 'GCS_MERGED_VIDEO_BUCKET') : '';
@@ -64,13 +71,21 @@ function getStorage() {
         private_key: String(privateKey).replace(/\\n/g, '\n'),
       },
     });
-  } else if (keyFile && fs.existsSync(keyFile)) {
-    storageSingleton = new Storage({
-      projectId: projectId || undefined,
-      keyFilename: keyFile,
-    });
   } else {
-    storageSingleton = new Storage({ projectId: projectId || undefined });
+    const resolvedKey = resolveGcpKeyFilename();
+    if (resolvedKey && fs.existsSync(resolvedKey)) {
+      storageSingleton = new Storage({
+        projectId: projectId || undefined,
+        keyFilename: resolvedKey,
+      });
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      console.warn(
+        `[GCS] GOOGLE_APPLICATION_CREDENTIALS not found: ${resolvedKey || '(unset)'} (cwd=${process.cwd()}). Set an absolute path to the JSON key.`
+      );
+      storageSingleton = new Storage({ projectId: projectId || undefined });
+    } else {
+      storageSingleton = new Storage({ projectId: projectId || undefined });
+    }
   }
   return storageSingleton;
 }
@@ -277,13 +292,72 @@ const deleteFromGCS = async (publicId, kind = 'image') => {
 };
 
 /**
+ * Delete all processed outputs for a lesson: HLS prefix (or single MP4) plus raw upload object when set.
+ */
+async function deleteLessonVideoAssets(lesson) {
+  if (!lesson) return null;
+  const videoPublicId = lesson.videoPublicId;
+  const rawVideoPublicId = lesson.rawVideoPublicId;
+  const videoType = lesson.videoType;
+
+  try {
+    if (videoType === 'hls' && videoPublicId) {
+      const key = String(videoPublicId).replace(/^\/+/, '');
+      const lower = key.toLowerCase();
+      if (lower.endsWith('playlist.m3u8')) {
+        const prefix = key.slice(0, -'playlist.m3u8'.length);
+        await deleteProcessedVideoPrefix(prefix);
+      } else {
+        await deleteProcessedVideoPrefix(key);
+      }
+    } else if (videoPublicId) {
+      await deleteProcessedVideoFile(videoPublicId);
+    }
+    if (rawVideoPublicId) {
+      await deleteRawObject(rawVideoPublicId);
+    }
+  } catch (e) {
+    console.error('[GCS] deleteLessonVideoAssets', e.message);
+    throw e;
+  }
+  return { ok: true };
+}
+
+/**
  * Startup check: logs success/failure like MongoDB (call when server boots).
  * Does not throw — server keeps running even if GCS fails (uploads will error later).
  */
+
+function logMediaCdnStatus() {
+  const signOn =
+    String(process.env.GCS_SIGN_FOR_CDN || '').toLowerCase() === 'true';
+  const base = (process.env.MEDIA_CDN_BASE_URL || '').trim();
+  const baseLine = base ? base : '(not set — map LB/CDN in GCP; optional for signed URLs)';
+  const rewriteOn =
+    String(process.env.MEDIA_CDN_REWRITE_SIGNED_URLS || '').toLowerCase() === 'true';
+  const rewriteHint = base
+    ? rewriteOn
+      ? ' — MEDIA_CDN_REWRITE_SIGNED_URLS=true (signed URLs may be rewritten; risk SignatureDoesNotMatch if host mismatch)'
+      : ' — default: signed URLs stay on storage.googleapis.com (Section 4.2)'
+    : '';
+  console.log(
+    `📡 Media CDN: GCS_SIGN_FOR_CDN=${signOn ? 'on' : 'off'} (GET /api/media/signed-read-url) · MEDIA_CDN_BASE_URL=${baseLine}${rewriteHint}`
+  );
+  try {
+    const { getHlsPlaylistCacheTtlMs } = require('./mediaStreamingConfig');
+    console.log(
+      `   HLS: /api/hls-proxy · playlist text cache ${getHlsPlaylistCacheTtlMs()}ms (HLS_PLAYLIST_CACHE_TTL_MS)`
+    );
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 async function verifyGcsAtStartup() {
   const provider = (process.env.STORAGE_PROVIDER || 'local').toLowerCase();
   if (provider !== 'gcs') {
     console.log('✅ Storage: local — files under /uploads (GCS not used)');
+    logMediaCdnStatus();
     return;
   }
 
@@ -296,12 +370,14 @@ async function verifyGcsAtStartup() {
     console.error(
       '❌ GCS: STORAGE_PROVIDER=gcs but GCS_BUCKET_PROCESSED_VIDEOS or GCS_BUCKET_STATIC_ASSETS is missing'
     );
+    logMediaCdnStatus();
     return;
   }
 
-  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (keyFile && !fs.existsSync(keyFile)) {
-    console.error('❌ GCS: credentials file not found:', keyFile);
+  const resolvedKey = resolveGcpKeyFilename();
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS && resolvedKey && !fs.existsSync(resolvedKey)) {
+    console.error('❌ GCS: credentials file not found:', resolvedKey, `(cwd=${process.cwd()})`);
+    logMediaCdnStatus();
     return;
   }
 
@@ -311,7 +387,9 @@ async function verifyGcsAtStartup() {
       bucketStatic().getMetadata(),
     ];
     const rawName = resolveRawBucketName();
-    if (rawName) {
+    const merged = getMergedVideoBucketName();
+    // When GCS_MERGED_VIDEO_BUCKET is set, raw + processed share bucketVideos() — skip duplicate getMetadata
+    if (rawName && !merged) {
       checks.push(bucketRaw().getMetadata());
     }
     await Promise.all(checks);
@@ -319,17 +397,20 @@ async function verifyGcsAtStartup() {
       `✅ GCS: connected — buckets OK → videos: ${videoName} | static: ${staticName}`
     );
     if (rawName) {
-      console.log(`   raw uploads (HLS pipeline): ${rawName}`);
+      const mergedNote = merged ? ' (same bucket as processed — GCS_MERGED_VIDEO_BUCKET)' : '';
+      console.log(`   raw uploads (HLS pipeline): ${rawName}${mergedNote}`);
     } else {
       console.warn(
-        '⚠️ GCS: raw bucket not configured — HLS pipeline is OFF; new lesson videos upload as MP4 to the processed bucket. Set GCS_BUCKET_RAW_UPLOADS=vixhunter-raw-uploads (or matching name).'
+        '⚠️ GCS: raw bucket not configured — HLS pipeline is OFF; set GCS_MERGED_VIDEO_BUCKET or GCS_BUCKET_RAW_UPLOADS, or rely on MP4 to processed bucket only.'
       );
     }
     if (process.env.GCS_PROJECT_ID) {
       console.log(`   GCS project: ${process.env.GCS_PROJECT_ID}`);
     }
+    logMediaCdnStatus();
   } catch (err) {
     console.error('❌ GCS: connection or bucket access failed:', err.message || err);
+    logMediaCdnStatus();
   }
 }
 
@@ -344,6 +425,7 @@ module.exports = {
   deleteRawObject,
   deleteProcessedVideoPrefix,
   deleteProcessedVideoFile,
+  deleteLessonVideoAssets,
   publicObjectUrl,
   getVideoDurationSeconds,
   bucketVideos,

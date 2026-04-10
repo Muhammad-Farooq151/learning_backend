@@ -13,7 +13,7 @@ const {
   resetPassword,
 } = require('../controllers/authController');
 
-/** Doc §4.5 — strict limit on credential endpoints */
+/** Doc §5 — strict limit on credential endpoints (10 req / 15 min per IP) */
 const authRouteLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -23,7 +23,7 @@ const authRouteLimiter = rateLimit({
 });
 
 // POST /api/auth/signup
-router.post('/signup', signup);
+router.post('/signup', authRouteLimiter, signup);
 
 // POST /api/auth/login
 router.post('/login', authRouteLimiter, login);
@@ -35,19 +35,19 @@ router.post('/admin-login', authRouteLimiter, adminLogin);
 router.post('/logout', logout);
 
 // POST /api/auth/verify-otp
-router.post('/verify-otp', verifyOTP);
+router.post('/verify-otp', authRouteLimiter, verifyOTP);
 
 // POST /api/auth/verify-email
-router.post('/verify-email', verifyEmail);
+router.post('/verify-email', authRouteLimiter, verifyEmail);
 
 // POST /api/auth/resend-otp
-router.post('/resend-otp', resendOTP);
+router.post('/resend-otp', authRouteLimiter, resendOTP);
 
 // POST /api/auth/forgot-password
-router.post('/forgot-password', forgotPassword);
+router.post('/forgot-password', authRouteLimiter, forgotPassword);
 
 // POST /api/auth/reset-password
-router.post('/reset-password', resetPassword);
+router.post('/reset-password', authRouteLimiter, resetPassword);
 
 module.exports = router;
 
