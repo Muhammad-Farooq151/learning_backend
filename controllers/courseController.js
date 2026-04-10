@@ -435,6 +435,7 @@ const getCourseById = async (req, res) => {
     courseObj.enrolled = enrolledCount;
 
     if (Array.isArray(courseObj.lessons) && courseObj.lessons.length > 0) {
+      
       courseObj.lessons = [...courseObj.lessons].sort(
         (a, b) => (a.order ?? 0) - (b.order ?? 0)
       );
