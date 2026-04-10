@@ -8,9 +8,15 @@ const {
   getCourseById,
   updateCourse,
   deleteCourse,
+  presignNewCourseLessonVideos,
+  presignExistingCourseLessonVideo,
 } = require('../controllers/courseController');
 const { streamCourseThumbnail } = require('../controllers/courseMediaController');
 const { uploadCourseFiles } = require('../middleware/upload');
+
+// Direct-to-GCS signed PUT (small JSON only; bypasses Cloud Run request size limits)
+router.post('/presign-lesson-videos', adminAuth, presignNewCourseLessonVideos);
+router.post('/:courseId/presign-lesson-video', adminAuth, presignExistingCourseLessonVideo);
 
 // Create new course (with thumbnail and videos) - Admin only
 router.post(
