@@ -1,21 +1,4 @@
-/**
- * Google Cloud Transcoder API — HLS multi-bitrate jobs.
- *
- * Auth must match GCS: pass projectId + keyFilename (or inline credentials).
- * Without this, TranscoderServiceClient() may target the wrong project and return
- * PERMISSION_DENIED / "Transcoder API has not been used in project or is disabled".
- *
- * Project ID vs job name:
- * - createJob parent uses GCS_PROJECT_ID (string), e.g. projects/learning-dashboard-483415/locations/us-central1
- * - Returned job.name is canonical: projects/417706222080/locations/.../jobs/UUID
- * - The numeric segment is the GCP *project number* (same project as your project id). NOT wrong credentials.
- *
- * IAM (service account used in GOOGLE_APPLICATION_CREDENTIALS or GCS_CLIENT_EMAIL):
- *   - roles/transcoder.admin  OR  roles/transcoder.user  (create jobs)
- *   - Storage access to RAW input + PROCESSED output buckets (e.g. roles/storage.objectAdmin on those buckets, or storage.admin)
- *
- * Region: must be a Transcoder-supported location (default us-central1).
- */
+
 const fs = require('fs');
 const { TranscoderServiceClient } = require('@google-cloud/video-transcoder');
 
@@ -32,9 +15,7 @@ const CREATE_JOB_RETRY_DELAY_MS = Math.max(
 
 let transcoderClientSingleton = null;
 
-/**
- * Same credential strategy as config/gcsStorage.js so Transcoder and Storage use one identity.
- */
+
 function buildTranscoderClientOptions() {
   const projectId = process.env.GCS_PROJECT_ID;
   const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
