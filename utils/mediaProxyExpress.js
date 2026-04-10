@@ -1,3 +1,4 @@
+const { getHlsPlaylistCacheTtlMs } = require('../config/mediaStreamingConfig');
 const { getBearerToken, assertMediaAccess } = require('./secureMediaAccess');
 const { parseGcsHttpsUrl } = require('../services/gcsUrlParser');
 const {
@@ -75,7 +76,7 @@ function rewritePlaylistBody(text, playlistUrlString, origin, proxyPathname, jwt
 
 /** Raw playlist text cache (rewrite still per-request with JWT in URLs). */
 const playlistCache = new Map();
-const PLAYLIST_TTL_MS = 30_000;
+const PLAYLIST_TTL_MS = getHlsPlaylistCacheTtlMs();
 const PLAYLIST_MAX = 200;
 
 function getCachedPlaylist(cacheKey) {
@@ -247,4 +248,5 @@ async function handleMediaProxyGet(req, res, allowPrefixes, proxyPathname = '/ap
 
 module.exports = {
   handleMediaProxyGet,
+  streamBinaryFromGcs,
 };

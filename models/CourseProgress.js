@@ -93,9 +93,11 @@ const courseProgressSchema = new mongoose.Schema({
   },
 }, {
   timestamps: true,
+  /** High-frequency video progress saves run concurrently; __v optimistic locking causes VersionError. */
+  versionKey: false,
 });
 
-// Index for efficient queries
+// Section 6 — compound index for progress lookups (Atlas: same { userId, courseId })
 courseProgressSchema.index({ userId: 1, courseId: 1 }, { unique: true });
 
 /**

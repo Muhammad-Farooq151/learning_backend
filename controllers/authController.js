@@ -273,10 +273,20 @@ const verifyOTP = async (req, res) => {
       });
     }
 
-    // Generate JWT token (you'll need to install jsonwebtoken)
-    // For now, returning user data
-    // TODO: Implement JWT token generation
-    const token = 'temp_token_' + user._id; // Replace with actual JWT
+    const jwtSecret = process.env.JWT_SECRET || 'default_dev_jwt_secret_change_me';
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+      },
+      jwtSecret,
+      { expiresIn: '7d', algorithm: 'HS256' }
+    );
+
+    setAuthCookie(res, token);
+    const exposeToken = process.env.AUTH_EXPOSE_TOKEN_IN_RESPONSE !== 'false';
 
     // Update email verification status if it's a signup verification
     if (!user.isEmailVerified) {
@@ -288,7 +298,7 @@ const verifyOTP = async (req, res) => {
       success: true,
       message: 'OTP verified successfully',
       data: {
-        token,
+        ...(exposeToken ? { token } : {}),
         user: {
           id: user._id,
           fullName: user.fullName,

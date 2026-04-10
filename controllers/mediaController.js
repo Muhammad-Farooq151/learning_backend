@@ -3,7 +3,8 @@ const Course = require('../models/Course');
 const { getJwtStringFromRequest } = require('../utils/authRequest');
 const { verifyJwtToken } = require('../utils/jwtVerify');
 const { assertMediaAccess } = require('../utils/secureMediaAccess');
-const { generateSignedUrl } = require('../utils/signedUrl');
+const { generateSignedUrl, TTL_MS } = require('../utils/streamUrl');
+const VideoAccessLog = require('../models/VideoAccessLog');
 const { decryptPath, pathCryptoEnabled } = require('../utils/pathCrypto');
 
 function parseGcsHttpsUrl(urlString) {
@@ -46,7 +47,7 @@ async function getLessonStream(req, res) {
     if (!found?.lesson?.videoUrl) {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
-    const { lesson } = found;
+    const { course, lesson } = found;
 
     if (lesson.videoType !== 'hls') {
       return res.status(400).json({ success: false, message: 'Not an HLS lesson' });
@@ -70,7 +71,25 @@ async function getLessonStream(req, res) {
     }
 
     const signedUrl = await generateSignedUrl('playlist', parsed.bucketName, parsed.objectKey);
-    return res.json({ success: true, signedUrl });
+    const expiresAt = new Date(Date.now() + TTL_MS.playlist);
+
+    try {
+      await VideoAccessLog.create({
+        userId: decoded.userId,
+        lessonId: lesson._id,
+        courseId: course._id,
+        accessedAt: new Date(),
+        ip: String(req.ip || req.socket?.remoteAddress || '').slice(0, 128),
+      });
+    } catch (logErr) {
+      console.warn('[getLessonStream] VideoAccessLog', logErr.message || logErr);
+    }
+
+    return res.json({
+      success: true,
+      signedUrl,
+      expiresAt: expiresAt.toISOString(),
+    });
   } catch (e) {
     console.error('[getLessonStream]', e);
     return res.status(500).json({ success: false, message: e.message || 'Server error' });
