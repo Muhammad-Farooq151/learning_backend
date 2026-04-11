@@ -9,10 +9,12 @@ const {
   deleteStoredFile,
   deleteLessonVideoAssets,
 } = require('../config/storage');
+const gcs = require('../config/gcsStorage');
 const {
   isHlsPipelineEnabled,
   logHlsPipelineDecision,
   prepareHlsLessonUpload,
+  buildHlsLessonFieldsFromExistingRaw,
   scheduleHlsTranscoding,
 } = require('../config/videoPipeline');
 const { cleanupFiles } = require('../middleware/upload');
@@ -59,6 +61,159 @@ const detachCourseFromTutorByName = async (tutorName, courseId) => {
   });
 
   return tutor;
+};
+
+const MAX_LESSON_VIDEO_BYTES = 8 * 1024 * 1024 * 1024;
+
+function parseDirectUploadPlan(req) {
+  try {
+    const raw = req.body.directUploadPlan;
+    if (raw == null || raw === '') return null;
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return null;
+  }
+}
+
+function directUploadIndexMap(plan) {
+  const m = new Map();
+  if (!plan || !Array.isArray(plan.lessons)) return m;
+  plan.lessons.forEach((d) => {
+    if (d && d.lessonIndex !== undefined && d.lessonIndex !== null) {
+      m.set(Number(d.lessonIndex), d);
+    }
+  });
+  return m;
+}
+
+function assertRawKeyMatchesLesson(objectKey, courseId, lessonId) {
+  const norm = String(objectKey || '').replace(/^\/+|\/+$/g, '');
+  const ext = path.extname(norm) || '.mp4';
+  const expected = gcs.rawObjectRelForLesson(courseId, lessonId, ext);
+  if (norm !== expected) {
+    throw new Error('Video object path does not match this course lesson');
+  }
+}
+
+/** Presign raw PUT URLs for a new course (browser uploads directly to GCS; avoids Cloud Run body limits). */
+const presignNewCourseLessonVideos = async (req, res) => {
+  try {
+    if (!isHlsPipelineEnabled()) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Direct upload requires STORAGE_PROVIDER=gcs, raw bucket, and ENABLE_VIDEO_TRANSCODER.',
+      });
+    }
+    const { lessons } = req.body;
+    if (!Array.isArray(lessons) || lessons.length === 0) {
+      return res.status(400).json({ success: false, message: 'lessons array is required' });
+    }
+
+    const courseId = new mongoose.Types.ObjectId();
+    const out = [];
+
+    for (const item of lessons) {
+      const lessonIndex = Number(item.lessonIndex);
+      const fileName = typeof item.fileName === 'string' ? item.fileName : '';
+      const fileSize = item.fileSize != null ? Number(item.fileSize) : 0;
+
+      if (!Number.isFinite(lessonIndex) || lessonIndex < 0) {
+        return res.status(400).json({ success: false, message: 'Invalid lessonIndex' });
+      }
+      if (!fileName.trim()) {
+        return res.status(400).json({ success: false, message: 'fileName is required per lesson' });
+      }
+      if (fileSize > MAX_LESSON_VIDEO_BYTES) {
+        return res.status(400).json({ success: false, message: 'Video exceeds maximum size (8GB)' });
+      }
+
+      const ext = path.extname(fileName) || '.mp4';
+      const lessonId = new mongoose.Types.ObjectId();
+      const objectRel = gcs.rawObjectRelForLesson(courseId, lessonId, ext);
+      const contentType = gcs.contentTypeForVideoExt(ext);
+      const { uploadUrl, objectKey } = await gcs.getSignedPutUrlForRawObject(objectRel, contentType);
+
+      out.push({
+        lessonIndex,
+        lessonId: String(lessonId),
+        objectKey,
+        uploadUrl,
+        contentType,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        courseId: String(courseId),
+        lessons: out,
+      },
+    });
+  } catch (error) {
+    console.error('[presignNewCourseLessonVideos]', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create upload URLs',
+    });
+  }
+};
+
+/** Presign raw PUT for one lesson on an existing course (large replacement video). */
+const presignExistingCourseLessonVideo = async (req, res) => {
+  try {
+    if (!isHlsPipelineEnabled()) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Direct upload requires STORAGE_PROVIDER=gcs, raw bucket, and ENABLE_VIDEO_TRANSCODER.',
+      });
+    }
+    const { courseId } = req.params;
+    const course = await Course.findById(courseId);
+    if (!course) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
+
+    const { lessonIndex, fileName, fileSize } = req.body;
+    const idx = Number(lessonIndex);
+    if (!Number.isFinite(idx) || idx < 0 || !course.lessons || idx >= course.lessons.length) {
+      return res.status(400).json({ success: false, message: 'Invalid lessonIndex' });
+    }
+    const fileSizeN = fileSize != null ? Number(fileSize) : 0;
+    if (fileSizeN > MAX_LESSON_VIDEO_BYTES) {
+      return res.status(400).json({ success: false, message: 'Video exceeds maximum size (8GB)' });
+    }
+
+    const fn = typeof fileName === 'string' ? fileName : '';
+    if (!fn.trim()) {
+      return res.status(400).json({ success: false, message: 'fileName is required' });
+    }
+
+    const lesson = course.lessons[idx];
+    const lessonId = lesson._id;
+    const ext = path.extname(fn) || '.mp4';
+    const objectRel = gcs.rawObjectRelForLesson(course._id, lessonId, ext);
+    const contentType = gcs.contentTypeForVideoExt(ext);
+    const { uploadUrl, objectKey } = await gcs.getSignedPutUrlForRawObject(objectRel, contentType);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        lessonIndex: idx,
+        lessonId: String(lessonId),
+        objectKey,
+        uploadUrl,
+        contentType,
+      },
+    });
+  } catch (error) {
+    console.error('[presignExistingCourseLessonVideo]', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create upload URL',
+    });
+  }
 };
 
 // Create a new course
@@ -168,10 +323,31 @@ const createCourse = async (req, res) => {
       });
     }
 
-    const courseId = new mongoose.Types.ObjectId();
+    const directPlan = parseDirectUploadPlan(req);
+    const directByIndex = directUploadIndexMap(directPlan);
+
+    if (directPlan && directPlan.lessons && parsedLessons && Array.isArray(parsedLessons)) {
+      for (const d of directPlan.lessons) {
+        const li = Number(d.lessonIndex);
+        if (!Number.isFinite(li) || li < 0 || li >= parsedLessons.length) {
+          return res.status(400).json({
+            success: false,
+            message: 'directUploadPlan contains an invalid lessonIndex',
+          });
+        }
+      }
+    }
+
+    let courseId;
+    if (directPlan && directPlan.courseId && mongoose.Types.ObjectId.isValid(directPlan.courseId)) {
+      courseId = new mongoose.Types.ObjectId(directPlan.courseId);
+    } else {
+      courseId = new mongoose.Types.ObjectId();
+    }
+
     const pendingHlsJobs = [];
 
-    if (lessonVideoFiles.length > 0) {
+    if (lessonVideoFiles.length > 0 || directByIndex.size > 0) {
       logHlsPipelineDecision('createCourse');
     }
 
@@ -180,7 +356,15 @@ const createCourse = async (req, res) => {
     if (parsedLessons && Array.isArray(parsedLessons)) {
       for (let i = 0; i < parsedLessons.length; i++) {
         const lesson = parsedLessons[i];
-        const lessonId = new mongoose.Types.ObjectId();
+        const direct = directByIndex.get(i);
+
+        let lessonId;
+        if (direct && direct.lessonId && mongoose.Types.ObjectId.isValid(direct.lessonId)) {
+          lessonId = new mongoose.Types.ObjectId(direct.lessonId);
+        } else {
+          lessonId = new mongoose.Types.ObjectId();
+        }
+
         const lessonData = {
           _id: lessonId,
           lessonName: lesson.lessonName || '',
@@ -191,7 +375,37 @@ const createCourse = async (req, res) => {
 
         const videoFile = lessonVideoMap[i] || null;
 
-        if (videoFile) {
+        if (direct && direct.objectKey) {
+          if (videoFile) {
+            if (req.files && Array.isArray(req.files)) {
+              req.files.forEach((file) => cleanupFiles([file]));
+            }
+            return res.status(400).json({
+              success: false,
+              message: `Lesson ${i + 1}: use either direct GCS upload or multipart upload, not both`,
+            });
+          }
+          try {
+            assertRawKeyMatchesLesson(direct.objectKey, courseId, lessonId);
+            const { lessonFields, scheduleMeta } = await buildHlsLessonFieldsFromExistingRaw(
+              direct.objectKey,
+              courseId,
+              lessonId,
+              0
+            );
+            Object.assign(lessonData, lessonFields);
+            pendingHlsJobs.push(scheduleMeta);
+          } catch (error) {
+            console.error(`[createCourse] direct raw lesson ${i}:`, error);
+            if (req.files && Array.isArray(req.files)) {
+              req.files.forEach((file) => cleanupFiles([file]));
+            }
+            return res.status(400).json({
+              success: false,
+              message: error.message || `Error linking video for lesson ${i + 1}`,
+            });
+          }
+        } else if (videoFile) {
           try {
             if (isHlsPipelineEnabled()) {
               console.log(`[createCourse] HLS pipeline — course ${courseId} lesson ${lessonId}`);
@@ -560,9 +774,24 @@ const updateCourse = async (req, res) => {
       }
     });
 
+    const directPlan = parseDirectUploadPlan(req);
+    const directByIndex = directUploadIndexMap(directPlan);
+
+    if (directPlan && directPlan.lessons && parsedLessons && Array.isArray(parsedLessons)) {
+      for (const d of directPlan.lessons) {
+        const li = Number(d.lessonIndex);
+        if (!Number.isFinite(li) || li < 0 || li >= parsedLessons.length) {
+          return res.status(400).json({
+            success: false,
+            message: 'directUploadPlan contains an invalid lessonIndex',
+          });
+        }
+      }
+    }
+
     const pendingHlsUpdate = [];
 
-    if (lessonVideoFiles.length > 0) {
+    if (lessonVideoFiles.length > 0 || directByIndex.size > 0) {
       logHlsPipelineDecision('updateCourse');
     }
 
@@ -573,6 +802,7 @@ const updateCourse = async (req, res) => {
         const existingLesson = course.lessons[i];
 
         const videoFile = lessonVideoMap[i] || null;
+        const directEntry = directByIndex.get(i);
 
         let lessonId;
         if (lesson._id != null && mongoose.Types.ObjectId.isValid(lesson._id)) {
@@ -584,7 +814,45 @@ const updateCourse = async (req, res) => {
         }
         lesson._id = lessonId;
 
-        if (videoFile) {
+        if (directEntry && directEntry.objectKey) {
+          if (videoFile) {
+            if (req.files && Array.isArray(req.files)) {
+              req.files.forEach((file) => cleanupFiles([file]));
+            }
+            return res.status(400).json({
+              success: false,
+              message: `Lesson ${i + 1}: use either direct GCS upload or multipart upload, not both`,
+            });
+          }
+          if (existingLesson && existingLesson.videoPublicId) {
+            try {
+              const prev = existingLesson.toObject ? existingLesson.toObject() : existingLesson;
+              await deleteLessonVideoAssets(prev);
+            } catch (error) {
+              console.error(`Error deleting old video for lesson ${i}:`, error);
+            }
+          }
+          try {
+            assertRawKeyMatchesLesson(directEntry.objectKey, course._id, lessonId);
+            const { lessonFields, scheduleMeta } = await buildHlsLessonFieldsFromExistingRaw(
+              directEntry.objectKey,
+              course._id,
+              lessonId,
+              0
+            );
+            Object.assign(lesson, lessonFields);
+            pendingHlsUpdate.push(scheduleMeta);
+          } catch (error) {
+            console.error(`[updateCourse] direct raw lesson ${i}:`, error);
+            if (req.files && Array.isArray(req.files)) {
+              req.files.forEach((file) => cleanupFiles([file]));
+            }
+            return res.status(400).json({
+              success: false,
+              message: error.message || `Error linking video for lesson ${i + 1}`,
+            });
+          }
+        } else if (videoFile) {
           if (existingLesson && existingLesson.videoPublicId) {
             try {
               const prev = existingLesson.toObject ? existingLesson.toObject() : existingLesson;
@@ -878,4 +1146,6 @@ module.exports = {
   getCourseById,
   updateCourse,
   deleteCourse,
+  presignNewCourseLessonVideos,
+  presignExistingCourseLessonVideo,
 };

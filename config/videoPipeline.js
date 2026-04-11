@@ -124,6 +124,64 @@ async function prepareHlsLessonUpload(filePath, courseId, lessonId) {
   return { lessonFields, scheduleMeta };
 }
 
+/**
+ * After the browser uploads the raw file directly to GCS (signed URL), build the same
+ * lesson fields + transcoder meta as prepareHlsLessonUpload without re-uploading from disk.
+ */
+async function buildHlsLessonFieldsFromExistingRaw(publicId, courseId, lessonId, durationSeconds = 0) {
+  const normalized = String(publicId).replace(/^\/+|\/+$/g, '');
+  const exists = await gcs.rawObjectExists(normalized);
+  if (!exists) {
+    throw new Error(
+      `Raw video not found at ${normalized}. Complete the direct upload to GCS before saving the course.`
+    );
+  }
+
+  const rawBucket = gcs.bucketRaw();
+  const bucketName = rawBucket.name;
+  const inputUri = gsUri(bucketName, normalized);
+
+  const merged = gcs.getMergedVideoBucketName();
+  const rawProcessed =
+    merged ||
+    process.env.GCS_BUCKET_PROCESSED_VIDEOS ||
+    process.env.GCS_BUCKET_VIDEOS;
+  if (!rawProcessed) {
+    throw new Error('Set GCS_MERGED_VIDEO_BUCKET or GCS_BUCKET_PROCESSED_VIDEOS');
+  }
+  const processedName = gcs.normalizeBucketNameFromEnv(
+    rawProcessed,
+    merged ? 'GCS_MERGED_VIDEO_BUCKET' : 'GCS_BUCKET_PROCESSED_VIDEOS'
+  );
+
+  const outputPrefix = merged
+    ? `processed/courses/${courseId}/${lessonId}/`
+    : `courses/${courseId}/${lessonId}/`;
+  const outputUri = `gs://${processedName}/${outputPrefix}`;
+  const playlistKey = `${outputPrefix}playlist.m3u8`;
+  const videoUrl = gcs.publicObjectUrl(processedName, playlistKey);
+
+  const lessonFields = {
+    videoUrl,
+    videoPublicId: playlistKey,
+    videoType: 'hls',
+    transcodingStatus: 'pending',
+    rawVideoPublicId: normalized,
+    transcodingJobName: null,
+    duration: Math.max(0, Number(durationSeconds) || 0),
+  };
+
+  const scheduleMeta = {
+    courseId: String(courseId),
+    lessonId: String(lessonId),
+    inputUri,
+    outputUri,
+    rawObjectKey: normalized,
+  };
+
+  return { lessonFields, scheduleMeta };
+}
+
 async function pollJobUntilTerminal(jobName) {
   const client = getTranscoderClient();
   const maxAttempts = 80;
@@ -232,6 +290,7 @@ module.exports = {
   getHlsPipelineDiagnostics,
   logHlsPipelineDecision,
   prepareHlsLessonUpload,
+  buildHlsLessonFieldsFromExistingRaw,
   scheduleHlsTranscoding,
   gsUri,
 };

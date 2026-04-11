@@ -226,6 +226,52 @@ const deleteRawObject = async (publicId) => {
   return { ok: true };
 };
 
+/** Content-Type for signed PUT (must match browser upload headers). */
+function contentTypeForVideoExt(ext) {
+  const e = String(ext || '').toLowerCase();
+  if (e === '.mov') return 'video/quicktime';
+  if (e === '.webm') return 'video/webm';
+  return 'video/mp4';
+}
+
+/**
+ * Same path convention as uploadRawVideoToGcs / videoPipeline.prepareHlsLessonUpload.
+ */
+function rawObjectRelForLesson(courseId, lessonId, ext) {
+  const e = ext && String(ext).startsWith('.') ? ext : `.${ext || 'mp4'}`;
+  const merged = getMergedVideoBucketName();
+  return merged
+    ? `raw/courses/${courseId}/${lessonId}/original${e}`
+    : `courses/${courseId}/${lessonId}/original${e}`;
+}
+
+async function rawObjectExists(objectName) {
+  const normalized = String(objectName || '').replace(/^\/+|\/+$/g, '');
+  if (!normalized) return false;
+  const [exists] = await bucketRaw().file(normalized).exists();
+  return Boolean(exists);
+}
+
+/**
+ * v4 signed PUT so the browser uploads bytes directly to the raw bucket (bypasses Cloud Run body limits).
+ */
+async function getSignedPutUrlForRawObject(objectRel, contentType, expiresMs = 60 * 60 * 1000) {
+  const normalized = String(objectRel).replace(/^\/+|\/+$/g, '');
+  const bucket = bucketRaw();
+  const file = bucket.file(normalized);
+  const [uploadUrl] = await file.getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + expiresMs,
+    contentType,
+  });
+  return {
+    uploadUrl,
+    bucketName: bucket.name,
+    objectKey: normalized,
+  };
+}
+
 /** Delete all objects under prefix in processed-videos bucket (HLS output folder). */
 const deleteProcessedVideoPrefix = async (prefix) => {
   if (!prefix) return null;
@@ -434,4 +480,8 @@ module.exports = {
   inferRawBucketFromProcessed,
   normalizeBucketNameFromEnv,
   verifyGcsAtStartup,
+  contentTypeForVideoExt,
+  rawObjectRelForLesson,
+  rawObjectExists,
+  getSignedPutUrlForRawObject,
 };
