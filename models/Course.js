@@ -121,7 +121,6 @@ const courseSchema = new mongoose.Schema({
   },
   courseLevel: {
     type: String,
-    enum: ['Beginner', 'Intermediate', 'Expert'],
     trim: true,
   },
   taxPercentage: {
