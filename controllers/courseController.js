@@ -12,6 +12,7 @@ const {
 const gcs = require('../config/gcsStorage');
 const {
   isHlsPipelineEnabled,
+  getHlsPipelineDiagnostics,
   logHlsPipelineDecision,
   prepareHlsLessonUpload,
   buildHlsLessonFieldsFromExistingRaw,
@@ -22,6 +23,9 @@ const {
   redactCourseMediaForClient,
   stripLessonAndResourceMediaUrls,
 } = require('../utils/redactCourseMediaUrls');
+const { validateCourseLevelValue } = require('../utils/courseLevelHelpers');
+const { validateCategoryValue } = require('../utils/categoryHelpers');
+const { normalizeAdminPickName } = require('../utils/normalizeAdminPickName');
 const fs = require('fs');
 const path = require('path');
 
@@ -99,10 +103,17 @@ function assertRawKeyMatchesLesson(objectKey, courseId, lessonId) {
 const presignNewCourseLessonVideos = async (req, res) => {
   try {
     if (!isHlsPipelineEnabled()) {
+      const d = getHlsPipelineDiagnostics();
       return res.status(400).json({
         success: false,
-        message:
-          'Direct upload requires STORAGE_PROVIDER=gcs, raw bucket, and ENABLE_VIDEO_TRANSCODER.',
+        message: `Direct upload needs the HLS/GCS pipeline. ${d.reason || 'Check server env.'}`,
+        diagnostics: {
+          storageProvider: d.provider,
+          rawBucketResolved: d.rawBucket || null,
+          enableVideoTranscoder: !d.transcoderDisabled,
+          hint:
+            'On Cloud Run set STORAGE_PROVIDER=gcs, GCS_MERGED_VIDEO_BUCKET or GCS_BUCKET_RAW_UPLOADS, GCS_PROJECT_ID, and keep ENABLE_VIDEO_TRANSCODER=true (or unset).',
+        },
       });
     }
     const { lessons } = req.body;
@@ -163,10 +174,17 @@ const presignNewCourseLessonVideos = async (req, res) => {
 const presignExistingCourseLessonVideo = async (req, res) => {
   try {
     if (!isHlsPipelineEnabled()) {
+      const d = getHlsPipelineDiagnostics();
       return res.status(400).json({
         success: false,
-        message:
-          'Direct upload requires STORAGE_PROVIDER=gcs, raw bucket, and ENABLE_VIDEO_TRANSCODER.',
+        message: `Direct upload needs the HLS/GCS pipeline. ${d.reason || 'Check server env.'}`,
+        diagnostics: {
+          storageProvider: d.provider,
+          rawBucketResolved: d.rawBucket || null,
+          enableVideoTranscoder: !d.transcoderDisabled,
+          hint:
+            'On Cloud Run set STORAGE_PROVIDER=gcs, GCS_MERGED_VIDEO_BUCKET or GCS_BUCKET_RAW_UPLOADS, GCS_PROJECT_ID, and keep ENABLE_VIDEO_TRANSCODER=true (or unset).',
+        },
       });
     }
     const { courseId } = req.params;
@@ -236,20 +254,33 @@ const createCourse = async (req, res) => {
       status = 'draft',
     } = req.body;
 
-    // Validate required fields
-    if (!title || !category || !instructor || !price || !description) {
+    const categoryNorm = normalizeAdminPickName(category);
+    const courseLevelNorm = normalizeAdminPickName(courseLevel);
+
+    // Validate required fields (category & course level are stored as names, not ids)
+    if (!title || !categoryNorm || !instructor || !price || !description) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: title, category, instructor, price, description',
       });
     }
 
-    // Validate courseLevel if provided
-    if (courseLevel && !['Beginner', 'Intermediate', 'Expert'].includes(courseLevel)) {
+    const okCategory = await validateCategoryValue(categoryNorm);
+    if (!okCategory) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid courseLevel. Must be one of: Beginner, Intermediate, Expert',
+        message: 'Invalid category. Use an entry from Admin → Categories.',
       });
+    }
+
+    if (courseLevelNorm) {
+      const okLevel = await validateCourseLevelValue(courseLevelNorm);
+      if (!okLevel) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid course level. Use an entry from Admin → Course Levels.',
+        });
+      }
     }
 
     // Parse JSON strings if they come as strings
@@ -519,11 +550,11 @@ const createCourse = async (req, res) => {
     const course = new Course({
       _id: courseId,
       title,
-      category,
+      category: categoryNorm,
       instructor,
       price,
       discountPercentage: parsedDiscountPercentage,
-      courseLevel: courseLevel,
+      courseLevel: courseLevelNorm || undefined,
       taxPercentage: parsedTaxPercentage,
       skills: parsedSkills || [],
       description,
@@ -923,15 +954,16 @@ const updateCourse = async (req, res) => {
       course.discountPercentage = parsedDiscountPercentage;
     }
 
-    // Update courseLevel if provided
     if (courseLevel !== undefined && courseLevel !== null && courseLevel !== '') {
-      if (!['Beginner', 'Intermediate', 'Expert'].includes(courseLevel)) {
+      const courseLevelNorm = normalizeAdminPickName(courseLevel);
+      const okLevel = await validateCourseLevelValue(courseLevelNorm);
+      if (!okLevel) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid courseLevel. Must be one of: Beginner, Intermediate, Expert',
+          message: 'Invalid course level. Use an entry from Admin → Course Levels.',
         });
       }
-      course.courseLevel = courseLevel;
+      course.courseLevel = courseLevelNorm;
     }
 
     // Parse and validate taxPercentage
@@ -948,7 +980,17 @@ const updateCourse = async (req, res) => {
 
     // Update course fields
     if (title) course.title = title;
-    if (category) course.category = category;
+    if (category !== undefined && category !== null && String(category).trim() !== '') {
+      const categoryNorm = normalizeAdminPickName(category);
+      const okCat = await validateCategoryValue(categoryNorm);
+      if (!okCat) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid category. Use an entry from Admin → Categories.',
+        });
+      }
+      course.category = categoryNorm;
+    }
     if (instructor) course.instructor = instructor;
     if (price) course.price = price;
     if (parsedSkills) course.skills = parsedSkills;

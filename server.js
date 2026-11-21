@@ -557,9 +557,13 @@ const transactionRoutes = require('./routes/transactionRoutes');
 const progressRoutes = require('./routes/progressRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const feedbackRoutes = require('./routes/feedbackRoutes');
+const categoryRoutes = require('./routes/categoryRoutes');
+const courseLevelRoutes = require('./routes/courseLevelRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', courseRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/course-levels', courseLevelRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/tutors', tutorRoutes);
 app.use('/api/payments', paymentRoutes);
@@ -1010,6 +1014,8 @@ server.listen(PORT, '0.0.0.0', () => {
       require('./models/CourseProgress');
       require('./models/Feedback');
       require('./models/VideoAccessLog');
+      require('./models/Category');
+      require('./models/CourseLevel');
       console.log('✅ Models loaded');
 
       const { verifyGcsAtStartup } = require('./config/gcsStorage');
